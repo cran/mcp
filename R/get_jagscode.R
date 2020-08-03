@@ -1,3 +1,7 @@
+# ABOUT: These functions "pad" the regression model from get_formula.R
+# resulting in a full JAGS model
+# -----------------
+
 #' Make JAGS code for Multiple Change Point model
 #'
 #' @aliases get_jagscode
@@ -75,19 +79,14 @@ model {")
     }
   }
 
-  # Autocorrelation: detect if there is an intercept or slope on AR
-  y_code = "y_[i_]"
-  has_ar = !all(is.na(unlist(ST$ar_code))) | !all(is.na(unlist(ST$ar_int)))
-  if (has_ar) {
-    # Add computation of autocorrelated residuals
+
+  ###################
+  # AUTOCORRELATION #
+  ###################
+  # Detect if there is an intercept or slope on AR
+  has_ar = !all(is.na(unlist(ST$ar_code))) || !all(is.na(unlist(ST$ar_int)))
+  if (has_ar)
     mm = paste0(mm, get_ar_code(arma_order, family, is_R = FALSE, xvar = ST$x[1]))
-    y_code = paste0(y_code, " + resid_[i_]")
-  }
-
-  # Add inverse link function to back-transform to observed metric
-  #if (family$link != "identity")  # not identity
-  y_code = paste0(family$linkinv_jags, "(", y_code, ")")
-
 
 
 
@@ -109,14 +108,27 @@ model {")
   # Add JAGS code for fitted values and indent it
   mm = paste0(mm, gsub("\n", "\n    ", formula_jags))
 
-  # Finally the likelihood
+
+  ##############
+  # LIKELIHOOD #
+  ##############
+  # Prepare y code (link and AR)
+  y_code = "y_[i_]"
+  if (has_ar)
+    y_code = paste0(y_code, " + resid_arma_[i_]")
+  y_code = paste0(family$linkinv_jags, "(", y_code, ")")
+
+  # Prepare variance code
+  has_weights = !all(is.na(ST$weights))
+  weights = ifelse(has_weights, yes = paste0(ST$weights[1], "[i_]"), no = "1")
+
+  # Family- and link-dependent likelihood
   mm = paste0(mm, "\n\n    # Likelihood and log-density for family = ", family$family, "()
     ")
 
   if (family$family == "gaussian") {
-    mm = paste0(mm, ST$y[1], "[i_] ~ dnorm(", y_code, ", 1 / sigma_[i_]^2)
-    loglik_[i_] = logdensity.norm(", ST$y[1], "[i_], ", y_code, ", 1 / sigma_[i_]^2)")
-
+    mm = paste0(mm, ST$y[1], "[i_] ~ dnorm(", y_code, ", ", weights, " / sigma_[i_]^2)  # SD as precision
+    loglik_[i_] = logdensity.norm(", ST$y[1], "[i_], ", y_code, ", ", weights, " / sigma_[i_]^2)  # SD as precision")
   } else if (family$family == "binomial") {
     mm = paste0(mm, ST$y[1], "[i_] ~ dbin(", y_code, ", ", ST$trials[1], "[i_])
     loglik_[i_] = logdensity.bin(", ST$y[1], "[i_], ", y_code, ", ", ST$trials[1], "[i_])")
@@ -126,14 +138,17 @@ model {")
   } else if (family$family == "poisson") {
     mm = paste0(mm, ST$y[1], "[i_] ~ dpois(", y_code, ")
     loglik_[i_] = logdensity.pois(", ST$y[1], "[i_], ", y_code, ")")
+  } else if (family$family == "exponential") {
+    mm = paste0(mm, ST$y[1], "[i_] ~ dexp(", y_code, ")
+    loglik_[i_] = logdensity.exp(", ST$y[1], "[i_], ", y_code, ")")
   }
 
   # Compute residuals for AR
   if (has_ar) {
     if (family$family == "binomial") {
-      mm = paste0(mm, "\n    resid_sigma_[i_] = ", family$link_jags, "(", ST$y[1], "[i_] / ", ST$trials[1], "[i_]) - y_[i_]  # Residuals represented by sigma_ after ARMA")
+      mm = paste0(mm, "\n    resid_abs_[i_] = ", family$link_jags, "(", ST$y[1], "[i_] / ", ST$trials[1], "[i_]) - y_[i_]  # Residuals represented by sigma_ after ARMA")
     } else {
-      mm = paste0(mm, "\n    resid_sigma_[i_] = ", family$link_jags, "(", ST$y[1], "[i_])  - y_[i_]  # Residuals represented by sigma_ after ARMA")
+      mm = paste0(mm, "\n    resid_abs_[i_] = ", family$link_jags, "(", ST$y[1], "[i_])  - y_[i_]  # Residuals represented by sigma_ after ARMA")
     }
   }
 
@@ -180,7 +195,7 @@ get_prior_str = function(prior, i, varying_group = NULL) {
     value %in% names(prior)
 
   # If not either number or known parameter, it should be a known distribution.
-  if (!is_fixed & !stringr::str_detect(value, all_d))
+  if (!is_fixed && !stringr::str_detect(value, all_d))
     stop("The prior '", name, " = ", value, "' is not a known distribution, a number, nor a model parameter.")
 
   # If it is a known distribution

@@ -66,21 +66,23 @@
 #'       prior strings (fit$prior), the JAGS model (fit$jags_code), etc.
 #' @param cores Positive integer or "all". Number of cores.
 #'
-#'   * `1`: serial sampling
+#'   * `1`: serial sampling (Default). `options(mc.cores = 3)` will dominate `cores = 1`
+#'     but not larger values of `cores`.
 #'   * `>1`: parallel sampling on this number of cores. Ideally set `chains`
 #'     to the same value. Note: `cores > 1` takes a few extra seconds the first
 #'     time it's called but subsequent calls will start sampling immediately.
 #'   * `"all"`: use all cores but one and sets `chains` to the same value. This is
 #'     a convenient way to maximally use your computer's power.
 #' @param chains Positive integer. Number of chains to run.
-#' @param iter Positive integer. Number of post-warmup samples to draw.
+#' @param iter Positive integer. Number of post-warmup samples to draw. The number
+#'   of iterations per chain is `iter/chains`.
 #' @param adapt Positive integer. Also sometimes called "burnin", this is the
 #'   number of samples used to reach convergence. Set lower for greater speed.
 #'   Set higher if the chains haven't converged yet or look at [tips, tricks, and debugging](https://lindeloev.github.io/mcp/articles/tips.html).
 #' @param inits A list if initial values for the parameters. This can be useful
 #'   if a model fails to converge. Read more in \code{\link[rjags]{jags.model}}.
 #'   Defaults to `NULL`, i.e., no inits.
-#' @param jags_code Pass JAGS code to `mcp` to use directly. This is useful if
+#' @param jags_code String. Pass JAGS code to `mcp` to use directly. This is useful if
 #'   you want to tweak the code in `fit$jags_code` and run it within the `mcp`
 #'   framework.
 #' @details Notes on priors:
@@ -97,7 +99,7 @@
 #'       function. So you will see SDs in `fit$prior` but precision ($1/SD^2)
 #'       in `fit$jags_code`
 #' @return An \code{\link{mcpfit}} object.
-#' @seealso \link{get_segment_table}
+#' @seealso \code{\link{get_segment_table}}
 #' @encoding UTF-8
 #' @author Jonas Kristoffer Lindeløv \email{jonas@@lindeloev.dk}
 #' @importFrom stats gaussian binomial
@@ -114,26 +116,29 @@
 #' # Fit it. The `ex_demo` dataset is included in mcp. Sample the prior too.
 #' # options(mc.cores = 3)  # Uncomment to speed up sampling
 #' ex_fit = mcp(model, data = ex_demo, sample = "both")
-#' }
 #'
 #' # See parameter estimates
 #' summary(ex_fit)
 #'
 #' # Visual inspection of the results
-#' plot(ex_fit)
-#' plot_pars(ex_fit)
+#' plot(ex_fit)  # Visualization of model fit/predictions
+#' plot_pars(ex_fit)  # Parameter distributions
+#' pp_check(ex_fit)  # Prior/Posterior predictive checks
 #'
 #' # Test a hypothesis
 #' hypothesis(ex_fit, "cp_1 > 10")
 #'
-#' \donttest{
+#' # Make predictions
+#' fitted(ex_fit)
+#' predict(ex_fit)
+#' predict(ex_fit, newdata = data.frame(time = c(55.545, 80, 132)))
+#'
 #' # Compare to a one-intercept-only model (no change points) with default prior
 #' model_null = list(response ~ 1)
 #' fit_null = mcp(model_null, data = ex_demo, par_x = "time")  # fit another model here
 #' ex_fit$loo = loo(ex_fit)
 #' fit_null$loo = loo(fit_null)
 #' loo::loo_compare(ex_fit$loo, fit_null$loo)
-#' }
 #'
 #' # Inspect the prior. Useful for prior predictive checks.
 #' summary(ex_fit, prior = TRUE)
@@ -150,13 +155,12 @@
 #'   int_3 = "int_1"           # Shared intercept between segment 1 and 3
 #' )
 #'
-#' \donttest{
 #' fit3 = mcp(model, data = ex_demo, prior = prior)
-#' }
 #'
 #' # Show the JAGS model
 #' cat(ex_fit$jags_code)
-
+#' }
+#'
 mcp = function(model,
                data = NULL,
                prior = list(),
@@ -175,19 +179,19 @@ mcp = function(model,
   ################
 
   # Check data
-  if (is.null(data) & !(sample %in% c(FALSE, "none")))
+  if (is.null(data) && sample %in% c("post", "both"))
     stop("Cannot sample without data.")
 
-  if (!is.null(data)) {
-    if (!is.data.frame(data) & !tibble::is_tibble(data))
-      stop("`data` must be a data.frame or a tibble.")
+  if (is.null(data) && sample == "prior")
+    stop("Cannot sample prior without data as some default priors depend on data. Possible solution: set priors to be independent of data (no SDY, MEANX, etc.) and provide a bit of mock-up data, which then will have no effect.")
 
+  if (!is.null(data)) {
+    assert_types(data, "data.frame", "tibble")
     data = data.frame(data)  # Force into data frame
   }
 
   # Check model
-  if (!is.list(model))
-    stop("`model` must be a list")
+  assert_types(model, "list")
 
   if (length(model) == 0)
     stop("At least one segment is needed in `model`")
@@ -198,8 +202,7 @@ mcp = function(model,
   }
 
   # Check prior
-  if (!is.list(prior))
-    stop("`prior` must be a named list.")
+  assert_types(prior, "list")
 
   which_duplicated = duplicated(names(prior))
   if (any(which_duplicated))
@@ -207,42 +210,27 @@ mcp = function(model,
 
   # Check and recode family
   if (class(family) != "family")
-    stop("`family` must be one of gaussian() or binomial()")
+    stop("`family` is not a valid family. Should be gaussian(), binomial(), etc.")
 
-  if (!family$family %in% c("gaussian", "binomial", "bernoulli", "poisson"))
-    stop("`family` must be one of gaussian(), binomial(), or bernoulli()")
+  family = mcp_family(family)  # convert to mcp family
 
-  if (family$family == "gaussian" & !family$link %in% c("identity"))
-    stop("'identity' is currently the only supported link function for gaussian().")
-
-  if (family$family %in% c("binomial", "bernoulli") & !family$link %in% c("logit"))
-    stop("'logit' is currently the only supported link function for binomial() and bernoulli().")
-
-  if (family$family == "poisson" & !family$link %in% c("log"))
-    stop("'log' is currently the only supported link function for poisson().")
-
-  family = get_family(family$family, family$link)  # convert to mcp family
-
-
-  # Check other stuff
-  if (!is.null(par_x) & !is.character(par_x))
-    stop("`par_x` must be NULL or a string.")
-
-  # Sampler settings
-  if (!sample %in% c("post", "prior", "both") & !is.logical(sample))
-    stop("`sample` must be 'post', 'prior', 'both', or 'none'/FALSE")
-
-  if (cores < 1 | !check_integer(cores, "cores"))
-    stop("`cores` has to be 1 or greater (parallel sampling).")
-
-  if (chains < 1 | !check_integer(chains, "chains"))
-    stop("`chains` has to be 1 or greater.")
+  # More checking...
+  assert_types(par_x, "null", "character")
+  assert_value(sample, allowed = c("post", "prior", "both", "none", FALSE))
+  assert_integer(cores, lower = 1)
+  assert_integer(chains, lower = 1)
+  assert_types(inits, "null", "list")
 
   if (cores > chains)
     message("`cores` is greater than `chains`. Not all cores will be used.")
 
+  # jags_code
+  if(!is.null(jags_code))
+    if (!is.character(jags_code) || !stringr::str_detect(gsub(" ", "", jags_code), "model\\{"))
+      stop("`jags_code` must be NULL or a string with a JAGS model, including 'model {...}'.")
+
   # Parallel fails on R version 3.6.0 and lower (sometimes at least).
-  if (cores > 1 & getRversion() < "3.6.1")
+  if (cores > 1 && getRversion() < "3.6.1")
     message("Parallel sampling (`cores` > 1) sometimes err on R versions below 3.6.1. You have ", R.Version()$version.string, ". Consider upgrading if it fails or hangs.")
 
 
@@ -262,6 +250,7 @@ mcp = function(model,
     x = unique(ST$x),
     y = unique(ST$y),
     trials = logical0_to_null(stats::na.omit(unique(ST$trials))),
+    weights = logical0_to_null(stats::na.omit(unique(ST$weights))),
     varying = logical0_to_null(c(stats::na.omit(ST$cp_group))),
     sigma = all_pars[stringr::str_detect(all_pars, "^sigma_")],
     arma = all_pars[stringr::str_detect(all_pars, "(^ar|^ma)[0-9]")]
@@ -275,7 +264,7 @@ mcp = function(model,
     if (family$link %in% c("logit", "probit"))
       message("The current implementation of autoregression can be fragile for link='logit'. In particular, if there are any all-success trials (e.g., 10/10), the only solution is for 'ar' to be 0.00. If fitting succeeds, do a proper assessment of model convergence.")
 
-    if (is.unsorted(data[, pars$x]) & is.unsorted(rev(data[, pars$x])))
+    if (is.unsorted(data[, pars$x]) && is.unsorted(rev(data[, pars$x])))
       message("'", pars$x, "' is unordered. Please note that ar() applies in the order of data of the data frame - not the values.")
   }
 
@@ -283,11 +272,12 @@ mcp = function(model,
   formula_str_sim = get_all_formulas(ST, prior, pars$x, ytypes = c("ct", "sigma", "arma"))
   simulate = get_simulate(formula_str_sim, pars, nrow(ST), family)
 
-  # Make jags code
-  max_arma_order = get_arma_order(pars$arma)
-  formula_str_jags = get_all_formulas(ST, prior, pars$x)
-  jags_code_generated = get_jagscode(prior, ST, formula_str_jags, max_arma_order, family, sample)
-  jags_code = ifelse(is.null(jags_code), yes = jags_code_generated, no = jags_code)  # Get from user?
+  # Make jags code if it is not provided by the user
+  if (is.null(jags_code)) {
+    max_arma_order = get_arma_order(pars$arma)
+    formula_str_jags = get_all_formulas(ST, prior, pars$x)
+    jags_code = get_jagscode(prior, ST, formula_str_jags, max_arma_order, family, sample)
+  }
 
 
   ##########

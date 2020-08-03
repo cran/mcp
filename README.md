@@ -1,9 +1,9 @@
-# mcp: Regression with Multiple Change Points
+# mcp: Regression with Multiple Change Points<img src="man/figures/logo.png" align="right" style="padding: 20px; padding-right: 0px;" />
 
-[![Travis-CI status](https://travis-ci.org/lindeloev/mcp.svg?branch=master)](https://travis-ci.org/lindeloev/mcp)
-[![Coveralls status](https://codecov.io/gh/lindeloev/mcp/branch/master/graph/badge.svg)](https://coveralls.io/r/lindeloev/mcp)
-[![CRAN status](https://www.r-pkg.org/badges/version/mcp)](https://CRAN.R-project.org/package=mcp)
-
+[![mcp Travis-CI status](https://travis-ci.org/lindeloev/mcp.svg?branch=master)](https://travis-ci.org/lindeloev/mcp)
+[![mcp Coveralls status](https://codecov.io/gh/lindeloev/mcp/branch/master/graph/badge.svg)](https://coveralls.io/r/lindeloev/mcp)
+[![mcp CRAN status](https://www.r-pkg.org/badges/version/mcp)](https://CRAN.R-project.org/package=mcp)
+[![mcp CRAN downloads](https://cranlogs.r-pkg.org/badges/mcp)](https://cranlogs.r-pkg.org/badges/mcp)
 
 `mcp` does regression with one or Multiple Change Points (MCP) between Generalized and hierarchical Linear Segments using Bayesian inference. `mcp` aims to provide maximum flexibility for analyses with a priori knowledge about the number of change points and the form of the segments in between.
 
@@ -16,7 +16,13 @@ Under the hood, `mcp` takes a formula-representation of linear segments and turn
 
  1. <a href="https://sourceforge.net/projects/mcmc-jags/" target="_blank">Install the latest version of JAGS</a>. Linux users can fetch binaries <a href="http://mcmc-jags.sourceforge.net/" target="_blank">here</a>.
  
- 2. Install `mcp` by running this in R:
+ 2. Install from CRAN:
+ 
+    ```r
+    install.packages("mcp")
+    ```
+    
+    or install the development version from GitHub:
  
     ```r
     if (!requireNamespace("remotes")) install.packages("remotes")
@@ -52,13 +58,13 @@ model = list(
 fit = mcp(model, data = ex_demo)
 ```
 
-## See results
+## Plot and summary
 
 The default plot includes data, fitted lines drawn randomly from the posterior, and change point(s) posterior density for each chain:
 ```r
 plot(fit)
 ```
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_demo.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_demo.png)
 
 Use `summary()` to summarise the posterior distribution as well as sampling diagnostics. They were [simulated with mcp](https://github.com/lindeloev/mcp/tree/master/data-raw/ex_demo.R) so the summary include the "true" values in the column `sim` and the column `match` show whether this true value is within the interval:
 
@@ -84,14 +90,16 @@ Population-level parameters:
   time_3    OK -0.2 -0.22 -0.38 -0.035    1   834
 ```
 
-`rhat` is the [Gelman-Rubin convergence diagnostic](https://www.rdocumentation.org/packages/coda/versions/0.19-3/topics/gelman.diag), `eff` is the [effective sample size](https://mc-stan.org/docs/2_18/reference-manual/effective-sample-size-section.html).
+`rhat` is the [Gelman-Rubin convergence diagnostic](https://www.rdocumentation.org/packages/coda/versions/0.19-3/topics/gelman.diag), `eff` is the [effective sample size](https://mc-stan.org/docs/2_18/reference-manual/effective-sample-size-section.html). You may also want to do a posterior predictive check using `pp_check(fit)`.
 
 `plot_pars(fit)` can be used to inspect the posteriors and convergence of all parameters. See the documentation of `plot_pars()` for many other plotting options. Here, we plot just the (population-level) change points. They often have "strange" posterior distributions, highlighting the need for a computational approach:
 
 ```r
 plot_pars(fit, regex_pars = "cp_")
 ```
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_demo_combo.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_demo_combo.png)
+
+Use `fitted(fit)` and `predict(fit)` to get fits and predictions for in-sample and out-of-sample data.
 
 
 ## Tests and model comparison
@@ -105,7 +113,6 @@ hypothesis(fit, "cp_1 > 25")
      hypothesis mean lower upper     p   BF
 1 cp_1 - 25 > 0 5.27 -1.81 13.76 0.917 11.1
 ```
-
 
 For model comparisons, we can fit a null model and compare the predictive performance of the two models using (approximate) leave-one-out cross-validation ([see more here](https://lindeloev.github.io/mcp/articles/comparison.html)). Our null model omits the first plateau and change point, essentially testing the credence of that change point:
 
@@ -147,7 +154,7 @@ The articles on the [mcp website](https://lindeloev.github.io/mcp) go in-depth w
 [Using priors](https://lindeloev.github.io/mcp/articles/priors.html):
  * See priors in `fit$prior`.
  * Set priors using `mcp(..., prior = list(cp_1 = "dnorm(0, 1)", cp_1 = "dunif(0, 45)")`.
- * The default prior is fast but informative for 2+ change points. Use `cp_i = "dirichlet(1)"` to gain neatness at the cost of speed.
+ * The default prior for change points is fast for estimation but is mathematically "messy". The Dirichlet prior (`cp_i = "dirichlet(1)"`) is slow but beautiful.
  * Fix parameters to specific values using `cp_1 = 45`.
  * Share parameters between segments using `slope_1 = "slope_2"`.
  * Truncate priors using `T(lower, upper)`, e.g., `int_1 = "dnorm(0, 1) T(0, )"`. `mcp` applies this automatically to change point priors to enforce order restriction. This is true for [varying change points](https://lindeloev.github.io/mcp/articles/varying.html) too.
@@ -156,19 +163,20 @@ The articles on the [mcp website](https://lindeloev.github.io/mcp) go in-depth w
 [Varying change points](https://lindeloev.github.io/mcp/articles/varying.html):
  * Simulate varying change points using `fit$simulate()`.
  * Get posteriors using `ranef(fit)`.
- * Plot using `plot(fit, facet_by="my_group")` and `plot_pars(fit, pars = "varying", type = "dens_overlay", ncol = 3)`.
+ * Plot using `plot(fit, facet_by = "my_group")` and `plot_pars(fit, pars = "varying", type = "dens_overlay", ncol = 3)`.
  * The default priors restrict varying change points to lie between the two adjacent change points.
 
-`mcp` currently supports the following GLM:
- * `gaussian(link = "identity")` (default). See examples above and below.
- * `binomial(link = "logit")`. See [binomial change points in mcp](https://lindeloev.github.io/mcp/articles/binomial.html).
- * `bernoulli(link = "logit")`. See [binomial change points in mcp](https://lindeloev.github.io/mcp/articles/binomial.html).
- * `poisson(link = "log")`. See [Poisson change points in mcp](https://lindeloev.github.io/mcp/articles/poisson.html).
+[Supported families and link functions](https://lindeloev.github.io/mcp/articles/families.html): 
+ * `mcp` currently supports specific combinations of families (`gaussian()`, `binomial()`, `bernoulli()`, and `poisson()`) and link functions (`identity`, `logit`, `probit`, and `log`).
+ * Use informative priors to avoid issues when using non-default priors.
+ * Use `binomial(link = "logit")` for [binomial change points in mcp](https://lindeloev.github.io/mcp/articles/binomial.html). Also relevant for `bernoulli(link = "logit")`.
+ * Use `poisson(link = "log")` for [Poisson change points in mcp](https://lindeloev.github.io/mcp/articles/poisson.html).
+ * Get results on the parameter scale rather than the observed scale using `plot(fit, scale = "linear")` or `predict(fit, scale = "linear")`.
 
 [Model comparison and hypothesis testing](https://lindeloev.github.io/mcp/articles/comparison.html):
  * Do Leave-One-Out Cross-Validation using `loo(fit)` and `loo::loo_compare(fit1$loo, fit2$loo)`.
  * Compute Savage-Dickey density rations using `hypothesis(fit, "cp_1 = 40")`.
- * Leverage directional and conditional tests to assess interval hypotheses (`hypothesis(fit, "cp_1 > 30 & cp_1 < 50")`), combined hypotheses (`hypothesis(fit, "cp_1 > 30 & int_1 > int_2")`), etc.
+ * Leverage directional and conditional tests to assess interval hypotheses (`hypothesis(fit, "cp_1 > 30 & cp_1 < 50")`), combined other hypotheses (`hypothesis(fit, "cp_1 > 30 & int_1 > int_2")`), etc.
 
 Modeling [variance](https://lindeloev.github.io/mcp/articles/variance.html) and [autoregression](https://lindeloev.github.io/mcp/articles/arma.html):
  * `~ sigma(1)` models an intercept change in variance. `~ sigma(0 + x)` models increasing/decreasing variance.
@@ -176,8 +184,12 @@ Modeling [variance](https://lindeloev.github.io/mcp/articles/variance.html) and 
  * You can model anything for `sigma()` and `ar()`. For example, `~ x + sigma(1 + x + I(x^2))` models polynomial change in variance with `x` on top of a slope on the mean.
  * Simulate effects and change points on `sigma()` and `ar()` using `fit$simulate()`
 
+[Get fitted and predicted values and intervals](https://lindeloev.github.io/mcp/articles/predict.html):
+ * `fitted(fit)` and `predict(fit)` take many arguments to predict in-sample and out-of-sample values and intervals.
+ * Forecasting with prior knowledge about future change points.
+
 [Tips, tricks, and debugging](https://lindeloev.github.io/mcp/articles/debug.html)
- * Speed up fitting using `mcp(..., cores = 3)` / `options(mcp_cores = 3)`, and/or `mcp(..., adapt = 500)`.
+ * Speed up fitting using `mcp(..., cores = 3)` / `options(mcp_cores = 3)`, and/or fewer iterations, `mcp(..., adapt = 500)`.
  * Help convergence along using `mcp(..., inits = list(cp_1 = 20, int_2 = -3))`.
  * Most errors will be caused by circularly defined priors.
 
@@ -187,7 +199,7 @@ Modeling [variance](https://lindeloev.github.io/mcp/articles/variance.html) and 
 `mcp` aims to support a wide variety of models. Here are some example models for inspiration.
 
 
-## Two plateaus
+## Means
 Find the single change point between two plateaus ([see how this data was simulated with mcp](https://github.com/lindeloev/mcp/tree/master/data-raw/ex_plateaus.R)).
 
 ```r
@@ -198,7 +210,7 @@ model = list(
 fit = mcp(model, ex_plateaus, par_x = "x")
 plot(fit)
 ```
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_plateaus.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_plateaus.png)
 
 
 ## Varying change points
@@ -211,10 +223,10 @@ model = list(
   1 + (1|id) ~ 0 + x  # joined slope, varying by id
 )
 fit = mcp(model, ex_varying)
-plot(fit, facet_by = "id", cp_dens = FALSE)
+plot(fit, facet_by = "id")
 ```
 
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_varying.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_varying.png)
 
 Summarise the varying change points using `ranef()` or plot them using `plot_pars(fit, "varying")`. Again, [this data was simulated](https://github.com/lindeloev/mcp/tree/master/data-raw/ex_varying.R) so the columns `match` and `sim` are added to show simulation values and whether they are inside the interval. Set the `width` wider for a more lenient criterion.
 
@@ -248,7 +260,7 @@ fit = mcp(model, ex_binomial, family = binomial())
 plot(fit, q_fit = TRUE)
 ```
 
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_binomial.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_binomial.png)
 
 Use `plot(fit, rate = FALSE)` if you want the points and fit lines on the original scale of `y` rather than divided by `N`.
 
@@ -286,7 +298,7 @@ The fit plot shows the inferred autocorrelated nature:
 plot(fit_ar)
 ```
 
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_ar.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_ar.png)
 
 
 
@@ -305,7 +317,7 @@ fit = mcp(model, ex_variance, cores = 3, adapt = 5000, iter = 5000)
 plot(fit, q_predict = TRUE)
 ```
 
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_variance.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_variance.png)
 
 
 
@@ -321,7 +333,7 @@ fit = mcp(model, ex_quadratic)
 plot(fit)
 ```
 
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_quadratic.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_quadratic.png)
 
 
 
@@ -339,7 +351,7 @@ fit = mcp(model, ex_trig)
 plot(fit)
 ```
 
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_trig.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_trig.png)
 
 
 
@@ -366,10 +378,10 @@ prior = list(
   cp_1 = "dunif(20, 50)"  # has to occur in this interval
 )
 fit = mcp(model, ex_rel_prior, prior, iter = 10000)
-plot(fit, cp_dens = FALSE)
+plot(fit)
 ```
 
-![](https://github.com/lindeloev/mcp/raw/master/man/figures/ex_fix_rel.png)
+![](https://github.com/lindeloev/mcp/raw/master/vignettes/_figures/ex_fix_rel.png)
 
 Comparing the summary to the fitted lines in the plot, we can see that `int_2` and `x_2` are relative values. We also see that the "wrong" priors made it harder to recover the parameters used [to simulate this data](https://github.com/lindeloev/mcp/tree/master/data-raw/ex_rel_prior.R) (`match` and `sim` columns):
 
@@ -393,7 +405,7 @@ Population-level parameters:
 
 
 
-# Do much more
+# Do much more with the MCMC samples
 Don't be constrained by these simple `mcp` functions. `fit$samples` is a regular `mcmc.list` object and all methods apply. You can work with the MCMC samples just as you would with `brms`, `rstanarm`, `jags`, or other samplers using the always excellent `tidybayes`:
 
 ```r
@@ -407,6 +419,12 @@ tidy_draws(fit$samples) %>%
 fit$pars$model  # check out which parameters are inferred.
 spread_draws(fit$samples, cp_1, cp_2, int_1, year_1) %>%
  # tidybayes stuff here
+```
+
+It may be convenient to use `fitted(fit, summary = FALSE)` or `predict(fit, summary = FALSE)` which return draws in `tidybayes` format, extended with additional columns for fits and predictions. For example:
+
+```r
+head(fitted(fit, summary = FALSE))
 ```
 
 

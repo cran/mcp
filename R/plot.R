@@ -1,15 +1,18 @@
+# ABOUT: These are functions directly related to plotting
+# ----------------
+
 #' Plot full fits
 #'
 #' Plot prior or posterior model draws on top of data. Use `plot_pars` to
 #' plot individual parameter estimates.
 #'
 #' @aliases plot plot.mcpfit
+#' @inheritParams pp_eval
 #' @param x An \code{\link{mcpfit}} object
 #' @param facet_by String. Name of a varying group.
 #' @param lines Positive integer or `FALSE`. Number of lines (posterior
 #'   draws). FALSE or `lines = 0` plots no lines. Note that lines always plot
-#'   fitted values - not predicted. For prediction intervals, see the
-#'   `q_predict` argument.
+#'   fitted values - not predicted. For prediction intervals, see the `q_predict` argument.
 #' @param geom_data String. One of "point" (default), "line" (good for time-series),
 #'   or FALSE (don not plot).
 #' @param cp_dens TRUE/FALSE. Plot posterior densities of the change point(s)?
@@ -22,18 +25,6 @@
 #'       plots the median and `quantiles = c(0.2, 0.8)` plots the 20% and 80%
 #'       quantiles.
 #' @param q_predict Same as `q_fit`, but for the prediction interval.
-#' @param rate Boolean. For binomial models, plot on raw data (`rate = FALSE`) or
-#'   response divided by number of trials (`rate = TRUE`). If FALSE, linear
-#'   interpolation on trial number is used to infer trials at a particular x.
-#' @param prior TRUE/FALSE. Plot using prior samples? Useful for `mcp(..., sample = "both")`
-#' @param which_y What to plot on the y-axis. One of
-#'
-#'   * `"ct"`: The central tendency which is often the mean after applying the
-#'     link function (default).
-#'   * `"sigma"`: The variance
-#'   * `"ar1"`, `"ar2"`, etc. depending on which order of the autoregressive
-#'     effects you want to plot.
-#'
 #' @param ... Currently ignored.
 #' @details
 #'   `plot()` uses `fit$simulate()` on posterior samples. These represent the
@@ -49,13 +40,12 @@
 #' @examples
 #' # Typical usage. ex_fit is an mcpfit object.
 #' plot(ex_fit)
+#' \donttest{
 #' plot(ex_fit, prior = TRUE)  # The prior
 #'
-#' \donttest{
 #' plot(ex_fit, lines = 0, q_fit = TRUE)  # 95% HDI without lines
 #' plot(ex_fit, q_predict = c(0.1, 0.9))  # 80% prediction interval
 #' plot(ex_fit, which_y = "sigma", lines = 100)  # The variance parameter on y
-#' }
 #'
 #' # Show a panel for each varying effect
 #' # plot(fit, facet_by = "my_column")
@@ -63,6 +53,7 @@
 #' # Customize plots using regular ggplot2
 #' library(ggplot2)
 #' plot(ex_fit) + theme_bw(15) + ggtitle("Great plot!")
+#' }
 #'
 plot.mcpfit = function(x,
                        facet_by = NULL,
@@ -74,265 +65,262 @@ plot.mcpfit = function(x,
                        rate = TRUE,
                        prior = FALSE,
                        which_y = "ct",
+                       arma = TRUE,
+                       nsamples = 2000,
+                       scale = "response",
                        ...) {
 
   # Just for consistent naming in mcp
   fit = x
 
-  # Check arguments
-  if (class(fit) != "mcpfit")
-    stop("Can only plot mcpfit objects. x was class: ", class(fit))
-
-  if (!coda::is.mcmc.list(fit$mcmc_post) & !coda::is.mcmc.list(fit$mcmc_prior))
-    stop("Cannot plot an mcpfit without prior or posterior samples.")
+  ########################
+  # ASSERTS AND RECODING #
+  ########################
+  assert_mcpfit(fit)
 
   if (lines != FALSE) {
-    check_integer(lines, "lines", lower = 1)
+    assert_integer(lines, lower = 1)
   } else {
     lines = 0
   }
 
-  if (lines > 1000) {
-    lines = 1000
-    warning("Setting `lines` to 1000 (maximum).")
-  }
+  assert_value(geom_data, allowed = c("point", "line", FALSE))
+  assert_logical(cp_dens)
 
-  if (!geom_data %in% c("point", "line", FALSE))
-    stop("`geom_data` has to be one of 'point', 'line', or FALSE.")
-
-  if (!is.logical(cp_dens))
-    stop("`cp_dens` must be TRUE or FALSE.")
-
+  # Quantiles
+  assert_types(q_fit, "logical", "numeric")
+  assert_types(q_predict, "logical", "numeric")
   if (all(q_fit == TRUE))
     q_fit = c(0.025, 0.975)
-
   if (all(q_predict == TRUE))
     q_predict = c(0.025, 0.975)
+  if (is.numeric(q_fit))
+    assert_numeric(q_fit, lower = 0, upper = 1)
+  if (is.numeric(q_predict))
+    assert_numeric(q_predict, lower = 0, upper = 1)
 
-  if (!is.logical(q_fit) & !is.numeric(q_fit))
-    stop("`q_fit` has to be TRUE, FALSE, or a vector of numbers.")
-
-  if (is.numeric(q_fit) & (any(q_fit > 1) | any(q_fit < 0)))
-    stop ("All `q_fit` have to be between 0 (0%) and 1 (100%).")
-
-  if (!is.logical(q_predict) & !is.numeric(q_predict))
-    stop("`q_predict` has to be TRUE, FALSE, or a vector of numbers.")
-
-  if (is.numeric(q_predict) & (any(q_predict > 1) | any(q_predict < 0)))
-    stop ("All `q_predict` have to be between 0 (0%) and 1 (100%).")
-
-  if (!is.logical(rate))
-    stop("`rate` has to be TRUE or FALSE.")
-
-  if (!is.logical(prior))
-    stop("`prior` must be either TRUE or FALSE.")
+  if (!is.null(nsamples)) {
+    assert_integer(nsamples, lower = 1)
+    if (lines != FALSE && nsamples < lines)
+      stop("`lines` must be less than or equal to `nsamples`.")
+  }
+  if (all(q_fit == FALSE) && all(q_predict == FALSE))
+    # No need for more samples if they are only used to draw lines.
+    nsamples = lines
 
   # Is facet_by a random/nested effect?
-  varying_groups = logical0_to_null(unique(stats::na.omit(fit$.other$ST$cp_group_col)))
+  assert_types(facet_by, "null", "character")
   if (!is.null(facet_by)) {
-    if (!facet_by %in% varying_groups)
-      stop("`facet_by` is not a data column used as varying grouping.")
+    varying_groups = logical0_to_null(unique(stats::na.omit(fit$.other$ST$cp_group_col)))
+    if (!(facet_by %in% varying_groups))
+      stop("`facet_by` must be a data column and modeled as a varying effect.")
   }
 
+  if (!coda::is.mcmc.list(fit$mcmc_post) && !coda::is.mcmc.list(fit$mcmc_prior))
+    stop("Cannot plot an mcpfit without prior or posterior samples.")
 
-  # R CMD Check wants a global definition of ".". The formal way of doing it is
-  # if(getRversion() >= "2.15.1") utils::globalVariables(".")
-  # but that makes the tests fail.
-  . = "ugly fix to please R CMD check"
+  if (scale == "linear" && rate == FALSE)
+    message("Known bug: the data points are plotted incorrectly when scale = 'linear' and rate = FALSE.")
 
-  # Select posterior/prior samples
-  samples = get_samples(fit, prior = prior)
-
-  # General settings
+  # Useful vars
   xvar = rlang::sym(fit$pars$x)
   yvar = rlang::sym(fit$pars$y)
-  simulate = fit$simulate  # To make a function call work later
-  dens_threshold = 0.001  # Do not display change point densities below this threshold.
-  dens_height = 0.2  # proportion of plot y-axis that the change point density makes up
-  if (all(q_fit == FALSE) & all(q_predict == FALSE)) {
-    HDI_SAMPLES = lines
-  } else {
-    HDI_SAMPLES = 1000 # Maximum number of draws to use for computing HDI
-    HDI_SAMPLES = min(HDI_SAMPLES, length(samples) * nrow(samples[[1]]))
-  }
   is_arma = length(fit$pars$arma) > 0
-  if (is_arma & (all(q_fit != FALSE) | all(q_predict != FALSE)))
-    message("Plotting ar() with quantiles can be slow. Raise an issue at GitHub (or thumb-up existing ones) if you need this.")
-  if (!is.null(facet_by)) {
-    n_facet_levels = length(unique(fit$data[, facet_by]))
+
+
+  ############################
+  # MAKE NEWDATA AND PREDICT #
+  ############################
+  newdata = tibble::tibble(!!xvar := get_eval_at(fit, facet_by))
+
+  if (is.null(facet_by) == TRUE) {
+    varying_pars = FALSE
+    if (is_arma)
+      newdata$.ydata = fit$data[, fit$pars$y]
   } else {
-    n_facet_levels = 1
+    varying_pars = unpack_varying(fit, cols = facet_by)$pars
+    if (is_arma) {
+      # If ARMA, replace newdata with the original data that includes xvar, yvar, and the varying effect.
+      newdata = dplyr::rename(fit$data, .ydata = as.character(yvar))
+    } else {
+      # Else, evaluate the same x for all varying levels
+      newdata = tidyr::expand_grid(newdata, !!facet_by := unique(dplyr::pull(fit$data, facet_by)))
+    }
   }
 
-  #################
-  # GET PLOT DATA #
-  #################
-  regex_pars_pop = paste0(fit$pars$population, collapse="|")
-
-  # No faceting
-  if (is.null(facet_by)) {
-    samples = samples %>%
-      tidybayes::spread_draws(!!rlang::sym(regex_pars_pop), regex = TRUE)
-
-  } else {
-    # Prepare for faceting
-    # Read more about this weird syntax at https://github.com/mjskay/tidybayes/issues/38
-    varying_by_facet = stats::na.omit(fit$.other$ST$cp_group[stringr::str_detect(fit$.other$ST$cp_group, paste0("_", facet_by, "$"))])
-    varying_by_facet = paste0(varying_by_facet, collapse="|")
-
-    samples = samples %>%
-      tidybayes::spread_draws(!!rlang::sym(regex_pars_pop),
-                              (!!rlang::sym(varying_by_facet))[!!rlang::sym(facet_by)],
-                              regex = TRUE)
-  }
-
-  # Remove some samples
-  samples = tidybayes::sample_draws(samples, n = HDI_SAMPLES)  # TO DO: use spread_draws(n = draws) when tidybayes 1.2 is out
-
-  # Get x-coordinates to evaluate simulate (etc.) at
-  eval_at = get_eval_at(fit, facet_by)
-
-  # First, let's get all the predictors in shape for simulate
-  if (fit$family$family != "binomial") {
-    samples = samples %>%
-      tidyr::expand_grid(!!xvar := eval_at)  # correct name of x-var
-  } else if (fit$family$family == "binomial") {
-    if (!is.null(facet_by) & rate == FALSE)
-      stop("Plot with rate = FALSE not implemented for varying effects (yet).")
-
-    # Interpolate trials for binomial at the values in "eval_at"
-    # to make sure that there are actually values to plot
-    #interpolated_trials = suppressWarnings(stats::approx(x = fit$data[, fit$pars$x], y = fit$data[, fit$pars$trials], xout = eval_at)$y)
-    interpolated_trials = stats::approx(x = fit$data[, fit$pars$x], y = fit$data[, fit$pars$trials], xout = eval_at)$y %>%
-      suppressWarnings() %>%
+  if (fit$family$family == "binomial") {
+    # Interpolate trials for binomial at all xvar to make sure that there are actually values to plot
+    newdata[, fit$pars$trials] = suppressWarnings(stats::approx(x = fit$data[, fit$pars$x], y = fit$data[, fit$pars$trials], xout = dplyr::pull(newdata, xvar))$y) %>%
       round()  # Only integers
-
-    samples = samples %>%
-      tidyr::expand_grid(!!xvar := eval_at) %>%  # correct name of x-var
-      dplyr::mutate(!!fit$pars$trials := rep(interpolated_trials, nrow(samples)))
   }
 
-  # For ARMA prediction, we need the raw data
-  # We know that eval_at is the same length as nrow(data), so we can simply add corresponding data$y for each draw
-  if (is_arma) {
-    samples = dplyr::mutate(samples, ydata = rep(fit$data[, fit$pars$y], HDI_SAMPLES * n_facet_levels))
+  # Predict
+  local_pp_eval = function(type) {
+    pp_eval(
+      object = fit,
+      newdata = newdata,
+      summary = FALSE,  # Get samples
+      type = type,
+      rate = rate,
+      prior = prior,
+      which_y = which_y,
+      varying = varying_pars,
+      arma = arma,
+      nsamples = nsamples,
+      samples_format = "tidy",
+      scale = scale
+    ) %>%
+      dplyr::rename(!!yvar := !!type)  # from "predict"/"fitted" to yvar (response name)
   }
 
-  # Predict y from model by adding fitted/predicted draws (vectorized)
-  if (lines > 0 | (any(q_fit != FALSE))) {
-    samples = samples %>%
-      dplyr::mutate(!!yvar := rlang::exec(simulate, !!!., type = "fitted", rate = rate, which_y = which_y, add_attr = FALSE))
-  }
-  if (any(q_predict != FALSE)) {
-    samples = samples %>%
-      dplyr::mutate(predicted_ = rlang::exec(simulate, !!!., type = "predict", rate = rate, add_attr = FALSE))
+  # Get data with fitted values. Optionally add predictions.
+  samples_expanded = local_pp_eval("fitted")
+  if (any(q_predict != FALSE))
+    samples_expanded$.predicted = local_pp_eval("predict") %>% dplyr::pull(yvar)
+
+
+
+  ###############################
+  # PREP RESPONSE DATA FOR PLOT #
+  ###############################
+  ydata = fit$data[, fit$pars$y]  # Convenient shortname
+
+  # If this is a binomial rate, divide by the number of trials
+  if (fit$family$family == "binomial" && rate == TRUE)
+    ydata = ydata / fit$data[, fit$pars$trials]
+
+  # Show data
+  if (scale == "linear") {
+    ydata = fit$family$linkfun(ydata)
+    if (any(is.infinite(ydata)))
+      message("Removing points with infinite values on the linear scale. You may get a few warnings.")
+    ydata[is.infinite(ydata)] = NA
   }
 
+  # If this is time series, strip fit$data$y for the "ts" class to avoid ggplot2 warning about scale picking..
+  # TO DO: hack.
+  fit$data[, fit$pars$y] = as.numeric(ydata)
 
 
   ###########
   # PLOT IT #
   ###########
-  # If this is a binomial rate, divide by the number of trials
-  if (fit$family$family == "binomial" & rate == TRUE) {
-    fit$data[, fit$pars$y] = fit$data[, fit$pars$y] / fit$data[, fit$pars$trials]
-  }
-
-  # Initiate plot.
+  # Initiate plot and show raw data (only applicable when which_y == "ct")
   gg = ggplot(fit$data, aes_string(x = fit$pars$x, y = fit$pars$y))
   if (which_y == "ct") {
-    if (geom_data == "point")
-      gg = gg + geom_point()
-    if (geom_data == "line")
+    if (geom_data == "point") {
+      if (is.null(fit$pars$weights)) {
+        gg = gg + geom_point()
+      } else {
+        gg = gg + geom_point(aes(size = fit$data[, fit$pars$weights[1]])) +
+          ggplot2::scale_size_area(max_size = 2 * 1.5/sqrt(1.5))  # See https://stackoverflow.com/questions/63023877/setting-absolute-point-size-for-geom-point-with-scale-size-area/63024297?noredirect=1#comment111454629_63024297
+      }
+    } else if (geom_data == "line") {
       gg = gg + geom_line()
+    }
   }
 
   # Add lines?
   if (lines > 0) {
-    # Sample the desired number of lines
-    data_lines = samples %>%
-      tidybayes::sample_draws(lines) %>%
-      dplyr::mutate(
-        # Add line ID to separate lines in the plot.
-        line = !!xvar == min(!!xvar),
-        line = cumsum(.data$line)
-      )
-
-    # Plot it
-    gg = gg + geom_line(aes(group = .data$line), data = data_lines, color = grDevices::rgb(0.5, 0.5, 0.5, 0.4))
+    data_lines = tidybayes::sample_draws(samples_expanded, lines)  # Only this number of lines
+    gg = gg + geom_line(aes(group = .data$.draw), data = data_lines, color = grDevices::rgb(0.5, 0.5, 0.5, 0.4))
   }
 
   # Add quantiles?
   if ((any(q_fit != FALSE))) {
-    samples_fit = dplyr::mutate(samples, y_quant = !!yvar)
-    gg = gg + geom_quantiles(samples_fit, q_fit, xvar, facet_by, color = "red")
+    gg = gg + geom_quantiles(samples_expanded, q_fit, xvar, yvar, facet_by, color = "red", lty = 2, lwd = 0.7)
   }
   if (any(q_predict != FALSE)) {
-    samples_predict = dplyr::mutate(samples, y_quant = .data$predicted_)
-    gg = gg + geom_quantiles(samples_predict, q_predict, xvar, facet_by, color = "green4")
+    yvar_predict = rlang::sym(".predicted")
+    gg = gg + geom_quantiles(samples_expanded, q_predict, xvar, yvar_predict, facet_by, color = "green4", lty = 2, lwd = 0.7)
   }
 
   # Add change point densities?
-  if (cp_dens == TRUE & length(fit$model) > 1) {
+  if (cp_dens == TRUE && length(fit$model) > 1) {
+
     # The scale of the actual plot (or something close enough)
-    if (which_y == "ct" & geom_data != FALSE) {
-      y_data_max = max(fit$data[, fit$pars$y])
-      y_data_min = min(fit$data[, fit$pars$y])
+    # This is faster than limits_y = ggplot2::ggplot_build(gg)$layout$panel_params[[1]]$y.range
+    if (which_y == "ct" && geom_data != FALSE) {
+      limits_y = c(min(fit$data[, fit$pars$y]),
+                   max(fit$data[, fit$pars$y]))
     } else if (any(q_predict != FALSE)) {
-      y_data_max = max(samples$predicted_)
-      y_data_min = min(samples$predicted_)
-    } else if (as.character(yvar) %in% names(samples)) {
-      y_data_max = max(dplyr::pull(samples, as.character(yvar)))
-      y_data_min = min(dplyr::pull(samples, as.character(yvar)))
+      limits_y = c(min(samples_expanded$.predicted),
+                   max(samples_expanded$.predicted))
+    } else if (as.character(yvar) %in% names(samples_expanded)) {
+      limits_y = c(min(dplyr::pull(samples_expanded, as.character(yvar))),
+                   max(dplyr::pull(samples_expanded, as.character(yvar))))
     } else {
       stop("Failed to draw change point density for this plot. Please raise an error on GitHub.")
     }
 
-    # Function to get density for each grouping in the dplyr pipes below.
-    density_xy = function(x) {
-      tmp = stats::density(x)
-      df = data.frame(x_dens = tmp$x, y_dens = tmp$y) %>%
-        dplyr::filter(.data$y_dens > dens_threshold) %>%
-        return()
-    }
-
-    # Get and group samples to be used for computing density
-    cp_regex = "^cp_[0-9]+$"
-    cp_dens_xy = get_samples(fit, prior = prior) %>%  # Use all samples for this
-      tidybayes::gather_draws(!!rlang::sym(cp_regex), regex = TRUE) %>%
-      dplyr::group_by(.data$.chain, add = TRUE) %>%
-
-      # Get density as x-y values by chain and change point number.
-      dplyr::summarise(dens = list(density_xy(.data$.value))) %>%
-      tidyr::unnest(cols = c(.data$dens)) %>%
-
-      # Then scale to plot.
-      dplyr::mutate(y_dens = y_data_min + .data$y_dens * (y_data_max - y_data_min) * dens_height / max(.data$y_dens))
-
-    # Add cp density to plot
-    gg = gg + ggplot2::geom_line(
-      data = cp_dens_xy,
-      mapping = aes(
-        x = .data$x_dens,
-        y = .data$y_dens,
-        color = .data$.chain,
-        group = interaction(.data$.variable, .data$.chain))) +
-      ggplot2::theme(legend.position = "none")
-
+    gg = gg + geom_cp_density(fit, facet_by, limits_y) +
+      ggplot2::coord_cartesian(
+        ylim = c(limits_y[1], NA),  # Remove density flat line from view
+        xlim = c(min(fit$data[, fit$pars$x]), max(fit$data[, fit$pars$x]))  # Very broad varying change point posteriors can expand beyond observed range. TO DO
+      )
   }
 
   # Add faceting?
-  if (!is.null(facet_by)) {
+  if (!is.null(facet_by))
     gg = gg + facet_wrap(paste0("~", facet_by))
-  }
 
   # Add better y-labels
-  if (fit$family$family == "bernoulli" | (fit$family$family == "binomial" & rate == TRUE))
-    gg = gg + ggplot2::labs(y = paste0("Probability of success for ", fit$pars$y))
+  if (scale == "linear")
+    gg = gg + ggplot2::labs(y = paste0(fit$family$link_r, "(", fit$pars$y, ")"))
+  if (scale == "response" && (fit$family$family == "bernoulli" || (fit$family$family == "binomial" && rate == TRUE)))
+    gg = gg + ggplot2::labs(y = paste0("P(", fit$pars$y, " = TRUE)"))
   if (which_y != "ct")
     gg = gg + ggplot2::labs(y = which_y)
 
+  gg = gg + ggplot2::theme(legend.position = "none")
   return(gg)
+}
+
+
+
+#' Density geom for `plot.mcpfit()`
+#'
+#' @aliases geom_cp_density
+#' @keywords internal
+#' @param fit An `mcpfit` object
+#' @param facet_by `NULL` or a a string, like `plot.mcpfit(..., facet_by = "id").`
+#' @param include Boolean. If `TRUE` and `!is.null(facet_by)`, only return
+#'   densities for the change points "affected" by `facet_by`. If `FALSE` and `!is.null(facet_by)`,
+#'   return all densities except those "affected" by `facet_by`. Has no effect if `is.null(facet_by)`
+#' @return A `ggplot2::stat_density` geom representing the change point densities.
+geom_cp_density = function(fit, facet_by, limits_y) {
+  dens_scale = 0.2  # Proportion of plot height
+  dens_cut = 0.05 + 0.007  # How much to move density down. 5% is ggplot default. Move a bit further.
+
+  # Get varying and population change point parameter names
+  if (!is.null(facet_by)) {
+    cp_matches_facet = fit$.other$ST$cp_group_col == facet_by  # Varies by this column
+    cp_not_facet = cp_matches_facet == FALSE | is.na(cp_matches_facet)
+    varying = stats::na.omit(fit$.other$ST$cp_group[cp_matches_facet])  # The rest
+    population = stats::na.omit(fit$.other$ST$cp_name[cp_not_facet][-1])  # [-1] to remove cp_0
+  } else {
+    varying = NULL
+    population = fit$.other$ST$cp_name[-1]
+  }
+
+  # Get samples in long format
+  samples = tidy_samples(fit, population = population, varying = varying, absolute = TRUE) %>%
+    tidyr::pivot_longer(cols = tidyselect::starts_with("cp_"), names_to = "cp_name", values_to = "value")
+
+  # Make the geom!
+  ggplot2::stat_density(aes(
+    x = value,
+    y = ..scaled.. * diff(limits_y) * dens_scale +  # Scale to proportion of view
+      limits_y[1] -  # Put on x-axis
+      diff(limits_y) * dens_cut,  # Move a bit further down to remove zero-density line from view.
+    group = paste0(.chain, cp_name),  # Apply scaling for each chain X cp_i combo
+    color = .chain
+  ),
+  data = samples,
+  position = "identity",
+  geom = "line",
+  show.legend = FALSE
+  )
 }
 
 
@@ -343,42 +331,26 @@ plot.mcpfit = function(x,
 #' @aliases geom_quantiles
 #' @keywords internal
 #' @inheritParams plot.mcpfit
-#' @param q Quantiles
+#' @inheritParams get_quantiles
 #' @param ... Arguments passed to geom_line
 #' @return A `ggplot2::geom_line` object.
 #' @encoding UTF-8
 #' @author Jonas Kristoffer Lindeløv \email{jonas@@lindeloev.dk}
 #'
-geom_quantiles = function(samples, q, xvar, facet_by, ...) {
-  # Trick to declare no facet = common group for all
-  if (length(facet_by) == 0)
-    facet_by = xvar
-
-  # First: add quantiles column
-  data_quantiles = samples %>%
-    tidyr::expand_grid(quant = q) %>%
-
-    # Now compute the quantile for each parameter, quantile, and (optionally) facet:
-    dplyr::group_by(!!xvar, .data$quant) %>%
-    dplyr::group_by(!!rlang::sym(facet_by), add = TRUE) %>%
-    dplyr::summarise(
-      y = stats::quantile(.data$y_quant, probs = .data$quant[1])
-    )
+geom_quantiles = function(samples, quantiles, xvar, yvar, facet_by, ...) {
+  data_quantiles = get_quantiles(samples, quantiles, xvar, yvar, facet_by)
 
   # Return geom
   geom = ggplot2::geom_line(
     mapping = aes(
       y = .data$y,
-      group = .data$quant
+      group = .data$quantile
     ),
     data = data_quantiles,
-    lty = 2,
-    lwd = 0.7,
-    ...)
+    ...
+  )
   return(geom)
 }
-
-
 
 
 #' Plot individual parameters
@@ -424,12 +396,11 @@ geom_quantiles = function(samples, q, xvar, facet_by, ...) {
 #' # Typical usage. ex_fit is an mcpfit object.
 #' plot_pars(ex_fit)
 #'
+#' \dontrun{
 #' # More options
 #' plot_pars(ex_fit, regex_pars = "^cp_")  # Plot only change points
 #' plot_pars(ex_fit, pars = c("int_3", "time_3"))  # Plot these parameters
 #' plot_pars(ex_fit, type = c("trace", "violin"))  # Combine plots
-#'
-#' \dontrun{
 #' # Some plots only take pairs. hex is good to assess identifiability
 #' plot_pars(ex_fit, type = "hex", pars = c("cp_1", "time_2"))
 #'
@@ -453,31 +424,28 @@ plot_pars = function(fit,
                      prior = FALSE) {
 
   # Check arguments
-  if (class(fit) != "mcpfit")
-    stop("Can only plot mcpfit objects. x was class: ", class(fit))
+  assert_mcpfit(fit)
 
-  if (!coda::is.mcmc.list(fit$mcmc_post) & !coda::is.mcmc.list(fit$mcmc_prior))
+  if (!coda::is.mcmc.list(fit$mcmc_post) && !coda::is.mcmc.list(fit$mcmc_prior))
     stop("Cannot plot an mcpfit without prior or posterior samples.")
 
-  if (!is.character(pars) | !is.character(regex_pars))
+  if (!is.character(pars) || !is.character(regex_pars))
     stop("`pars` and `regex_pars` has to be string/character.")
 
-  if (any(c("population", "varying") %in% pars) & length(pars )> 1)
+  if (any(c("population", "varying") %in% pars) && length(pars ) > 1)
     stop("`pars` cannot be a vector that contains multiple elements AND 'population' or 'varying'.")
 
-  if (any(c("hex", "scatter") %in% type) & (length(pars) != 2 | length(regex_pars) > 0))
+  if (any(c("hex", "scatter") %in% type) && (length(pars) != 2 || length(regex_pars) > 0))
     stop("`type` = 'hex' or 'scatter' takes exactly two parameters which must be provided via the `pars` argument")
 
-  if ("combo" %in% type & length(type) > 1)
+  if ("combo" %in% type && length(type) > 1)
     stop("'combo' type cannot be combined with other types. Replace 'combo' with the types you want combo\'ed")
 
-  check_integer(ncol, name = "ncol", lower = 1)
-
-  if (!is.logical(prior))
-    stop("`prior` must be either TRUE or FALSE.")
+  assert_integer(ncol, lower = 1)
+  assert_logical(prior)
 
   # Get posterior/prior samples
-  samples = get_samples(fit, prior = prior)
+  samples = mcmclist_samples(fit, prior = prior)
 
   # Handle special codes
   if ("population" %in% pars) {
@@ -499,6 +467,7 @@ plot_pars = function(fit,
 
   # TO DO: a lot of eval(parse()) here. Is there a more built-in method?
   #types = c("dens", "dens_overlay", "trace", "areas")
+  bayesplot::available_mcmc()  # quick fix to make R CMD Check happy that bayesplot is imported
   takes_facet = c("areas", "dens", "dens_overlay", "trace", "hist", "intervals", "trace", "trace_highlight", "violin")
   for (this_type in type) {
     this_facet = ifelse(this_type %in% takes_facet, paste0(", facet_args = list(ncol = ", ncol, ")"), "")
@@ -540,6 +509,7 @@ plot_pars = function(fit,
 #' @keywords internal
 #' @inheritParams plot.mcpfit
 #' @param fit An mcpfit object.
+#' @return A vector of x-values to evaluate at.
 get_eval_at = function(fit, facet_by) {
   # If there are ARMA terms, evaluate at the data
   if (length(fit$pars$arma) > 0) {
@@ -556,7 +526,7 @@ get_eval_at = function(fit, facet_by) {
 
   # Just give up for faceting and prior-plots (usually very distributed change points)
   # and return a reasonable resolution
-  if (!is.null(facet_by) | is.null(fit$mcmc_post)) {
+  if (!is.null(facet_by) || is.null(fit$mcmc_post)) {
     eval_at = seq(xmin, xmax, length.out = X_RESOLUTION_FACET)
     return(eval_at)
   }
@@ -578,4 +548,147 @@ get_eval_at = function(fit, facet_by) {
   }
 
   return(sort(eval_at))
+}
+
+
+#' Posterior Predictive Checks For Mcpfit Objects
+#'
+#' Plot posterior (default) or prior (`prior = TRUE`) predictive checks. This is convenience wrapper
+#' around the `bayesplot::ppc_*()` methods.
+#'
+#' @aliases pp_check pp_check.mcpfit
+#' @inheritParams pp_eval
+#' @param type One of `bayesplot::available_ppc("grouped", invert = TRUE) %>% stringr::str_remove("ppc_")`
+#' @param facet_by Name of a column in data modeled as varying effect(s).
+#' @param nsamples Number of draws. Note that you may want to use all data for summary geoms.
+#'   e.g., `pp_check(fit, type = "ribbon", nsamples = NULL)`.
+#' @param ... Further arguments passed to `bayesplot::ppc_type(y, yrep, ...)`
+#' @return A `ggplot2` object for single plots. Enriched by `patchwork` for faceted plots.
+#' @seealso \code{\link{plot.mcpfit}} \code{\link{pp_eval}}
+#' @encoding UTF-8
+#' @author Jonas Kristoffer Lindeløv \email{jonas@@lindeloev.dk}
+#' @export
+#' @examples
+#' \donttest{
+#' pp_check(ex_fit)
+#' pp_check(ex_fit, type = "ecdf_overlay")
+#' #pp_check(some_varying_fit, type = "loo_intervals", facet_by = "id")
+#' }
+#'
+pp_check = function(
+  object,
+  type = "dens_overlay",
+  facet_by = NULL,
+  newdata = NULL,
+  prior = FALSE,
+  varying = TRUE,
+  arma = TRUE,
+  nsamples = 100,
+  ...
+) {
+  # Internal mcp naming convention
+  fit = object
+  assert_mcpfit(fit)
+  assert_types(facet_by, "null", "character")
+  assert_logical(prior)
+  assert_types(varying, "logical", "character")
+  assert_logical(arma)
+  assert_integer(nsamples, lower = 1)
+
+  # Check and recode inputs
+  if (!is.null(facet_by))
+    if (!is.character(facet_by) || length(facet_by) != 1)
+      stop("`facet_by` must be a single character string.")
+
+  if (is.null(newdata)) {
+    y = as.numeric(fit$data[, fit$pars$y])  # strip simulated data of attributes
+    varying_data = fit$data[, facet_by]
+  } else {
+    assert_types(newdata, "data.frame", "tibble")
+    y = as.numeric(newdata[, fit$pars$y])  # strip simulated data of attributes
+    varying_data = newdata[, facet_by]
+  }
+
+  allowed_types = stringr::str_remove(bayesplot::available_ppc(), "ppc_")
+  allowed_types = allowed_types[stringr::str_detect(allowed_types, "_grouped") == FALSE]  # Grouped done mcp-side (see below)
+  if (!(type %in% allowed_types))
+    stop("`type` must be one of '", paste0(allowed_types, collapse = "', '"), "'")
+
+  # Get as tidy samples to preserve info on groups and sampled draws
+  samples = pp_eval(
+    fit,
+    newdata = newdata,
+    summary = FALSE,
+    type = "predict",
+    probs = FALSE,
+    rate = FALSE,
+    prior = prior,
+    which_y = "ct",
+    varying = varying,
+    arma = arma,
+    nsamples = nsamples,
+    samples_format = "tidy"
+  )
+
+  # Return plot with or without facets
+  if (is.null(facet_by)) {
+    yrep = tidy_to_matrix(samples, "predict")
+    plot_out = get_ppc_plot(fit, type, y, yrep, nsamples, samples$.draw, ...)  # One plot: use all of y and yrep
+    return(plot_out)
+  } else {
+    groups = unique(varying_data)
+    all_plots = list()
+    for (group in groups) {
+      # Compute/extract y and yrep for this group
+      y_this = y[varying_data == group]
+      samples_this = dplyr::filter(samples, !!rlang::sym(facet_by) == group)
+      yrep_this = tidy_to_matrix(samples_this, "predict")
+
+      # Add plot to list
+      all_plots[[group]] = get_ppc_plot(fit, type, y_this, yrep_this, nsamples, draws = samples_this$.draw) +
+        ggplot2::ggtitle(group)
+    }
+
+    # Return faceted plot using patchwork
+    plot_out = patchwork::wrap_plots(all_plots) + patchwork::plot_layout(guides = "collect")
+    return(plot_out)
+  }
+}
+
+
+#' pp_check for loo statistics
+#'
+#' @aliases get_loo_plot_call
+#' @keywords internal
+#' @inheritParams pp_check
+#' @param y Response vector
+#' @param yrep S X N matrix of predicted responses
+#' @param draws (required for loo-type plots) Indices of draws to use.
+#' @param ... Arguments passed to `bayesplot::ppc_type(y, yrep, ...)`
+#' @return A `ggplot2` object returned by `tidybayes::ppc_*(y, yrep, ...)`.
+#' @return A string
+#' @encoding UTF-8
+#' @author Jonas Kristoffer Lindeløv \email{jonas@@lindeloev.dk}
+#'
+get_ppc_plot = function(fit, type, y, yrep, nsamples, draws = NULL, ...) {
+  is_loo = stringr::str_detect(type, "loo")
+
+  if (is_loo == FALSE) {
+    bayesplot_call = paste0("bayesplot::ppc_", type, "(y, yrep, ...)")
+  } else if (is_loo == TRUE) {
+    # Compute loo if missing
+    fit = with_loo(fit, save_psis = TRUE, info = "Computing `fit$loo = loo(fit, save_psis = TRUE)`...")
+
+    # Extract psis_object and lw
+    psis_object = fit$loo$psis_object
+    lw = psis_object$log_weights[unique(draws), ]
+    psis_object$log_weights = lw
+    attr(psis_object, "dims") = c(dim(yrep))
+
+    # Build call (setting `samples` overwrites bayesplot defaults)
+    bayesplot_call = paste0("bayesplot::ppc_", type, "(y, yrep, psis_object = psis_object, lw = lw, samples = nsamples, ...)")
+  }
+
+  plot_out = suppressWarnings(eval(parse(text = bayesplot_call)))
+  return(plot_out)
 }

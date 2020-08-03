@@ -1,3 +1,6 @@
+# ABOUT: These functions compare models and/or hypotheses.
+# -----------------
+
 #' Compute information criteria for model comparison
 #'
 #' Takes an \code{\link{mcpfit}} as input and computes information criteria using loo or
@@ -28,11 +31,8 @@
 #' }
 #'
 criterion = function(fit, criterion = "loo", ...) {
-  if (!class(fit) == "mcpfit")
-    stop("class(fit) must be 'mcpfit'")
-
-  if (!criterion %in% c("loo", "waic"))
-    stop("criterion must be one of 'loo' or 'waic'")
+  assert_mcpfit(fit)
+  assert_value(criterion, allowed = c("loo", "waic"))
 
   # Log-likelihood MCMC samples as matrix
   loglik = as.matrix(do.call(rbind.data.frame, fit$mcmc_loglik))
@@ -56,7 +56,7 @@ criterion = function(fit, criterion = "loo", ...) {
 #' @aliases loo LOO loo.mcpfit
 #' @describeIn criterion Computes loo on mcpfit objects
 #' @param x An \code{\link{mcpfit}} object.
-#' @seealso \link{criterion}
+#' @seealso \code{\link{criterion}}
 #' @importFrom loo loo
 #' @export loo
 #' @export
@@ -70,7 +70,7 @@ loo.mcpfit = function(x, ...) {
 #' @param x An \code{\link{mcpfit}} object.
 #' @param ... Currently ignored
 #' @importFrom loo waic
-#' @seealso \link{criterion}
+#' @seealso \code{\link{criterion}}
 #' @export waic
 #' @export
 #'
@@ -81,9 +81,9 @@ waic.mcpfit = function(x, ...) {
 
 #' Test hypotheses on mcp objects.
 #'
-#' Rreturns posterior probabilities and Bayes Factors for flexible hypotheses involving
-#' model parameters. See the documentation below for the parameter `hypotheses`
-#' for examples of how to specify hypotheses, and [read worked examples on the mcp website](https://lindeloev.github.io/mcp/articles/comparison.html).
+#' Returns posterior probabilities and Bayes Factors for flexible hypotheses involving
+#' model parameters. The documentation for the argument `hypotheses` below
+#' shows examples of how to specify hypotheses, and [read worked examples on the mcp website](https://lindeloev.github.io/mcp/articles/comparison.html).
 #' For directional hypotheses, `hypothesis`` executes the hypothesis string in
 #' a `tidybayes`` environment and summerises the proportion of samples where
 #' the expression evaluates to TRUE. For equals-hypothesis, a Savage-Dickey
@@ -143,6 +143,11 @@ waic.mcpfit = function(x, ...) {
 #' @author Jonas Kristoffer Lindeløv \email{jonas@@lindeloev.dk}
 #'
 hypothesis = function(fit, hypotheses, width = 0.95, digits = 3) {
+  assert_mcpfit(fit)
+  assert_types(hypotheses, "character")
+  assert_numeric(width, lower = 0, upper = 1)
+  assert_integer(digits, lower = 0)
+
   # Loop through hypotheses and populate return_df
   return_df = data.frame()
   for (expression in hypotheses) {
@@ -156,13 +161,13 @@ hypothesis = function(fit, hypotheses, width = 0.95, digits = 3) {
     if (n_equals > 1)
       stop("Only one equals-test (Savage-Dickey ratio) allowed in each hypothesis: ", expression)
 
-    if (n_equals == 1 & n_directional > 0)
+    if (n_equals == 1 && n_directional > 0)
       stop("Equals cannot be combined with directional tests: ", expression)
 
     if (n_equals + n_directional == 0)
       stop("At least one operator must be present: <, >, =, <=, or >=: ", expression)
 
-    if (stringr::str_detect(expression, "\\[|\\]") & !stringr::str_detect(expression, "`"))
+    if (stringr::str_detect(expression, "\\[|\\]") && !stringr::str_detect(expression, "`"))
       stop("Needs `` around varying effects, e.g., `cp_1_id[2]`. Got this: ", expression)
 
 
@@ -182,14 +187,14 @@ hypothesis = function(fit, hypotheses, width = 0.95, digits = 3) {
       expression = paste0(LHS, " ", this_comparator, " 0")
 
       # Get effect estimate
-      samples = get_samples(fit) %>%
+      samples = mcmclist_samples(fit) %>%
         tidybayes::tidy_draws() %>%
         dplyr::mutate(effect = eval(parse(text = LHS)))
 
       # TO DO: check need to suppress warnings when tidybayes 1.2 is out?
       estimate = suppressWarnings(tidybayes::mean_hdci(samples, .data$effect, .width = width))
     } else {
-      samples = get_samples(fit) %>%
+      samples = mcmclist_samples(fit) %>%
         tidybayes::tidy_draws()
 
       estimate = list(effect = NA, .lower = NA, .upper = NA)
@@ -206,9 +211,9 @@ hypothesis = function(fit, hypotheses, width = 0.95, digits = 3) {
       BF = dens_post / dens_prior
 
       # If there is almost no density. somehow we get negative values.
-      if (dens_post < 0 & dens_prior > 0)
+      if (dens_post < 0 && dens_prior > 0)
         BF = 0
-      if (dens_post > 0 & dens_prior < 0)
+      if (dens_post > 0 && dens_prior < 0)
         BF = Inf
 
       p = BF / (BF + 1)

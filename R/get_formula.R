@@ -1,3 +1,7 @@
+# ABOUT: These functions build the change point regression model for R and JAGS
+# -----------------
+
+
 #' Call `get_formula_str` for multiple ytypes and paste strings
 #'
 #' Currently used to differentiate between the JAGS model (use all) and the
@@ -148,7 +152,7 @@ get_formula_str = function(ST, par_x, ytype = "ct", init = FALSE) {
       if (ytype == "ct") {
         formula_str = paste0(formula_str, "\n\n# Fitted value\ny_[i_] = \n")
       } else if (ytype == "sigma") {
-        formula_str = paste0(formula_str, "# Fitted standard deviation\nsigma_[i_] = \n")
+        formula_str = paste0(formula_str, "# Fitted standard deviation\nsigma_[i_] = max(0, \n")  # Add max(0, [formula]) to prevent modeling negative sigmas. JAGS uses precision = 1 / sigma^2 which yields positive precisions for negative sigmas.
       } else if (stringr::str_detect(ytype, "ar[0-9]+")) {
         formula_str = paste0(formula_str, "# Autoregressive coefficient for all AR(", ar_order,")\n", ytype, "_[i_] = \n")
       } else if (stringr::str_detect(ytype, "ma[0-9]+")) {
@@ -186,7 +190,7 @@ get_formula_str = function(ST, par_x, ytype = "ct", init = FALSE) {
 
     # If this is just a plateau (~ 0), i.e., the absence of intercept, slope, and varying effects
     if (init == TRUE) {  # Verbose for mean formula. Not for sigma.
-      if (all(is.na(int)) & all(is.na(slope_table))) {
+      if (all(is.na(int)) && all(is.na(slope_table))) {
         formula_str = paste0(formula_str, "  0 + \n")
       }
     }
@@ -199,6 +203,10 @@ get_formula_str = function(ST, par_x, ytype = "ct", init = FALSE) {
 
   # Remove all "unrealized" FUTURE_REL
   formula_str = gsub("FUTURE_REL", "", formula_str)
+
+  if (ytype == "sigma") {
+    formula_str = paste0(formula_str, ")")  # End max() statement
+  }
 
   # Return
   formula_str
@@ -223,16 +231,23 @@ get_formula_str = function(ST, par_x, ytype = "ct", init = FALSE) {
 get_simulate = function(formula_str, pars, nsegments, family) {
   # First some substitutions
   formula_func = gsub("\\[i_\\]", "", formula_str)  # No explicit indexing needed for R function
-  formula_func = gsub("min\\(", "pmin\\(", formula_func)  # vectorized mean for function
-  for (i in seq_len(nsegments)) {
+  formula_func = gsub("min\\(", "pmin\\(", formula_func)  # vectorized min
+  formula_func = gsub("max\\(", "pmax\\(", formula_func)  # vectorized max
+  for (i in seq_len(nsegments))
     formula_func = gsub(paste0("CP_", i, "_INDEX"), "", formula_func)  # Use vector of data
-  }
 
   # Remove hyperparameter on varying effects from pars$reg since it is not used for simulation
   pars$reg = pars$reg[!stringr::str_ends(pars$reg, "_sd")]
 
   # Helper
   is_arma = length(pars$arma) > 0
+
+  # Allowed values for argument which_y
+  allowed_which_y = c("ct")
+  if (is_arma == TRUE)
+    allowed_which_y = c(allowed_which_y, "ar[0-9]+")
+  if (length(pars$sigma) > 0)
+    allowed_which_y = c(allowed_which_y, "sigma")
 
   # Helper to build the list of simulate() arguments. Simply comma separates correctly
   args_if_exists = function(args, postfix = "") {
@@ -251,138 +266,167 @@ get_simulate = function(formula_str, pars, nsegments, family) {
                         yes = pars$x,  # just the x
                         no = paste0(unique(c(pars$x, pars$trials)), collapse = ", "))  # x and N, if they differ.
   out = paste0("
-  function(",
-    x_and_trials, ", ",
-    args_if_exists(pars$reg),
-    args_if_exists(pars$sigma),
-    args_if_exists(pars$arma),
-    args_if_exists(pars$varying, " = 0"),
-    ifelse(is_arma, paste0("\n    ", pars$y, " = NULL, \n    ydata = NULL, "), ""), "
-    type = 'predict',
-    quantile = FALSE,
-    rate = FALSE,
-    which_y = 'ct',
-    add_attr = TRUE,
-    ...) {
+function(",
+               x_and_trials, ", ",
+               args_if_exists(pars$reg),
+               args_if_exists(pars$sigma),
+               args_if_exists(pars$arma),
+               args_if_exists(pars$varying, " = 0"),
+               ifelse(is_arma, paste0("\n  ", pars$y, " = NULL, \n  .ydata = NULL, "), ""), "
+  type = 'predict',
+  quantile = FALSE,
+  rate = FALSE,
+  which_y = 'ct',
+  add_attr = TRUE,
+  arma = TRUE,
+  scale = 'response',
+  ...) {
 
-    # Use this for return to add simulation parameters to the output
-    args_names = as.list(match.call())  # Which arguments this function was called with
-    all_values = c(as.list(environment()), list(...))  # all vars and values in env
-    add_simulated = function(x) {
-      # Do not add simulated attribute
-      if (add_attr == FALSE) {
-        return(x)
-      } else {
-        # Add it!
-        args_values = all_values[names(all_values) %in% names(args_names)]  # Only those coming from call
-        args_values[['", pars$x ,"']] = NULL  # Remove x
-        ", ifelse(length(pars$trials) > 0, yes = paste0("args_values[['", pars$trials, "']] = NULL  # Remove trials"), no = ""), "
-        attr(x, 'simulated') = args_values  # Set as attribute
-        return(x)
-      }
+  # Asserts
+  mcp:::assert_value(type, allowed = c('predict', 'fitted'))
+  mcp:::assert_logical(quantile)
+  mcp:::assert_logical(add_attr)
+  mcp:::assert_logical(arma)
+  mcp:::assert_value(scale, allowed = c('response', 'linear'))
+
+  if (scale == 'linear' && type == 'predict')
+    stop(\"Only `type = 'fitted'` is meaningful when `scale = 'linear'`\")
+
+  if (stringr::str_detect(which_y, '", paste0(allowed_which_y, collapse = "|"), "') == FALSE)
+    stop(which_y, \" is not a parameter class in this model. It should be one of '", paste0(allowed_which_y, collapse = "', '"), "'\")
+
+  # Use this for return to add simulation parameters to the output
+  args_names = as.list(match.call())  # Which arguments this function was called with
+  all_values = c(as.list(environment()), list(...))  # all vars and values in env
+  add_simulated = function(x) {
+    # Do not add simulated attribute
+    if (add_attr == FALSE) {
+      return(x)
+    } else {
+      # Add it!
+      args_values = all_values[names(all_values) %in% names(args_names)]  # Only those coming from call
+      args_values[['", pars$x ,"']] = NULL  # Remove x
+      ", ifelse(length(pars$trials) > 0, yes = paste0("args_values[['", pars$trials, "']] = NULL  # Remove trials"), no = ""), "
+      attr(x, 'simulated') = args_values  # Set as attribute
+      return(x)
     }
+  }
 
-    # Helpers to simplify making the code for this function
-    cp_0 = -Inf
-    cp_", nsegments, " = Inf
+  # Helpers to simplify making the code for this function
+  cp_0 = -Inf
+  cp_", nsegments, " = Inf
 
-    ", formula_func, "
+  # This is where it happens: the change point indicator formula
+  ", formula_func, "
 
-
-    # Return predictions or fitted values?
-    if (!type %in% c('predict', 'fitted'))
-      stop(\"'`type` must be one of 'predict' or 'fitted'\")
-    ")
+  # Optionally transform
+  if (scale == 'response') {
+    y_ = ", family$linkinv_r, "(y_)
+  }
+  ")
 
   # Return depends on family
+  # GAUSSIAN ------------------------------
   if (family$family == "gaussian") {
     # If ARMA, build resid_ and return with that
     if (is_arma) {
       out = paste0(out, "
-      # Simulate AR residuals",
+
+  if (arma == TRUE) {
+    # Simulate AR residuals",
         get_ar_code(
-          ar_order = get_arma_order(pars$arma),
-          family = family,
-          is_R = TRUE,
-          xvar = pars$x,
-          yvar = pars$y
+         ar_order = get_arma_order(pars$arma),
+         family = family,
+         is_R = TRUE,
+         xvar = pars$x,
+         yvar = pars$y
         ), "
-      # Finally, add these autocorrelated predictions to the fitted y_:
-      y_ = y_ + resid_
-    ")
+  }
+  ")
     }
 
     out = paste0(out, "
-    # Use which_y to return something else than ct.
-    # First, rename to internal parameter name
-    if (which_y == 'sigma') {
-      which_y = 'sigma_'
-    } else if (stringr::str_detect(which_y, '^ar([0-9]+)$')) {
-      which_y = paste0(which_y, '_')
-    }
-    if (which_y != 'ct') {
-      if (!exists(which_y))
-        stop(which_y, ' was not found. Try one of \\'sigma\\', \\'ar1\\', etc.')
-      if (type != 'fitted')
-        stop('`type = \\'fitted\\` is the only option when `which_y != \\'ct\\'`')
+  # Use which_y to return something else than ct.
+  # First, rename to internal parameter name
+  if (which_y == 'sigma' || stringr::str_detect(which_y, '^ar([0-9]+)$'))
+    which_y = paste0(which_y, '_')
 
-      return(add_simulated(get(which_y)))
-    }
+  if (which_y != 'ct') {
+    if (!exists(which_y))
+      stop(which_y, \" was not found. Try one of 'sigma', 'ar1', etc.\")
+    if (type != 'fitted')
+      stop(\"`type = 'fitted'` is the only option when `which_y != 'ct'`\")
 
-    # If fitted or no data (will)
-    if (type == 'fitted') {")
-      if (is_arma) {
-        out = paste0(out, "
-      if (is.null(", pars$y, ") & is.null(ydata))
-        stop('fitted not meaningful for an AR(N) model without data to use for autocorrelation.')")
-      }
+    return(add_simulated(get(which_y)))
+  }")
+
+    # If fitted or no data
     out = paste0(out, "
-      return(add_simulated(y_))
+  if (type == 'fitted') {
+    return(add_simulated(y_))
+  } else if (type == 'predict') {
+    if (any(", family$linkinv_r, "(sigma_) < 0))
+      stop(\"Modelled negative sigma. First detected at ", pars$x, " = \", min(", pars$x, "[", family$linkinv_r, "(sigma_) < 0]))")
+
+    # Complex code if ARMA. Simple if not. resid_sigma_ was generated from sigma_ so no need to do an extra rnorm().
+    if (is_arma == TRUE) {
+      out = paste0(out, "
+    if (arma == TRUE) {
+      return(add_simulated(", family$linkinv_r, "(", family$link_r, "(y_) + resid_sigma_)))
+    } else {
+      return(add_simulated(", family$linkinv_r, "(", family$link_r, "(y_) + rnorm(length(y_), 0, sigma_))))
     }")
-    if(is_arma) {
-      out = paste0(out, "else if (type == 'predict' & (is.null(ydata) & is.null(", pars$y, "))) {
-      return(add_simulated(y_))
-    }")
+    } else if (is_arma == FALSE) {
+      out = paste0(out, "
+    return(add_simulated(rnorm(length(y_), y_, sigma_)))")
     }
-    out = paste0(out, "else if (type == 'predict') {
-      if (any(sigma_ < 0))
-        stop('Modelled negative sigma, which is impossible. First detected at ", pars$x, " = ', min(", pars$x, "[sigma_ < 0]))
-      return(add_simulated(rnorm(length(", pars$x, "), y_, sigma_)))
-      # return(add_simulated(qnorm(length(", pars$x, "), y_, sigma_)))
-      # if (is.numeric(quantile)) {
-      #   add_simulated(qnorm(quantile, y_, sigma_))
-      # } else if (quantile == FALSE) {
-      #   add_simulated(rnorm(length(", pars$x, "), y_, sigma_))
-      # } else {
-      #   stop('Invalid `quantile` argument to simulate()')
-      # }
-    }")
+
+    out = paste0(out, "
+  }
+  ")
+
+    # Attempt at returning quantiles directly
+    # return(add_simulated(qnorm(length(y_), y_, sigma_)))
+    # if (is.numeric(quantile)) {
+    #   add_simulated(qnorm(quantile, y_, sigma_))
+    # } else if (quantile == FALSE) {
+    #   add_simulated(rnorm(length(y_), y_, sigma_))
+    # } else {
+    #   stop(\"Invalid `quantile` argument to simulate()\")
+    # }
+
+    # OTHER FAMILIES ---------------------
   } else if (family$family == "binomial") {
     out = paste0(out, "
-    if (type == 'predict') {
-      if (rate == FALSE) return(add_simulated(rbinom(length(", pars$x, "), ", pars$trials, ", ilogit(y_))))
-      if (rate == TRUE)  return(add_simulated(rbinom(length(", pars$x, "), ", pars$trials, ", ilogit(y_)) / ", pars$trials, "))
-    } else if (type == 'fitted') {
-      if (rate == FALSE) return(add_simulated(", pars$trials, " * ilogit(y_)))
-      if (rate == TRUE)  return(add_simulated(ilogit(y_)))
-    }")
+  if (type == 'predict') {
+    if (rate == FALSE) return(add_simulated(rbinom(length(y_), ", pars$trials, ", y_)))
+    if (rate == TRUE)  return(add_simulated(rbinom(length(y_), ", pars$trials, ", y_) / ", pars$trials, "))
+  } else if (type == 'fitted') {
+    if (rate == FALSE) return(add_simulated(", pars$trials, " * y_))
+    if (rate == TRUE)  return(add_simulated(y_))
+  }")
   } else if (family$family == "bernoulli") {
     out = paste0(out, "
-    if (type == 'predict') return(add_simulated(rbinom(length(", pars$x, "), 1, ilogit(y_))))
-    if (type == 'fitted') return(add_simulated(ilogit(y_)))")
+  if (type == 'predict') return(add_simulated(rbinom(length(y_), 1, y_)))
+  if (type == 'fitted') return(add_simulated(y_))")
   } else if (family$family == "poisson") {
     out = paste0(out, "
-    if (type == 'predict') {
-      if (any(exp(y_) > 2146275819))
-        stop('Modelled extremely large value: exp(", pars$y, ") > 2146275819. First detected at ", pars$x, " = ', min(", pars$x, "[exp(y_) > 2146275819]))
-      return(add_simulated(rpois(length(", pars$x, "), exp(y_))))
-    } else if (type == 'fitted') {
-        return(add_simulated(exp(y_)))
-      }")
+  if (type == 'predict') {
+    if ((scale == 'response' && any(y_ > 2146275819)) || (scale == 'linear' && any(", family$linkinv_r, "(y_) > 2146275819)))
+      stop(\"Modelled extremely large value: ", family$linkinv_r, "(", pars$y, ") > 2146275819.\")
+    return(add_simulated(rpois(length(y_), y_)))
+  } else if (type == 'fitted') {
+    return(add_simulated(y_))
+  }")
+  } else if (family$family == "exponential") {
+    out = paste0(out, "
+  if (type == 'predict') return(add_simulated(rexp(length(y_), y_)))
+  if (type == 'fitted') return(add_simulated(1 / y_))
+    ")
   }
 
   out = paste0(out, "
-  }")
+}")
 
   # Return function
   eval(parse(text = out))
@@ -414,49 +458,48 @@ get_ar_code = function(ar_order, family, is_R, xvar, yvar = NA) {
   if (is_R) {
     # mm is the code string to be populated below
     mm = paste0("
-      if(!is.null(ydata)) ", yvar, " = ydata  # Hack to get a consistent argument name
+    # Hack to make simulate() callable with a fixed yvar name. Used internally in mcp.
+    if(!is.null(.ydata))
+      ", yvar, " = .ydata
+    ")
+
+# For simulated ydata:
+mm = paste0(mm, "
+    # resid_ is the observed residual from y_
+    # resid_ is split into the innovation and AR() part. So resid_ = resid_arma_ + resid_sigma_
+    resid_sigma_ = rnorm(length(", xvar, "), 0, sigma_)
+    if (all(is.null(", yvar, "))) {
+      message(\"Generating residuals for AR(N) model since the response column/argument '", yvar, "' was not provided.\")
       ar0_ = sigma_[1:", ar_order, "] * 0 + 1
-
-      # If got y. Use it to compute residuals
-      if (!all(is.na(", yvar, "))) {
-        if (!is.numeric(", yvar, "))
-          stop('Wrong format of ", yvar, ". Should be numeric.')
-        resid_sigma_ = ", yvar, " - y_
-      } else {
-        # No y, simulate residuals
-        resid_sigma_ = rnorm(length(", xvar, "), 0, sigma_)
-      }
-
-      resid_ = numeric(length(", xvar, "))")
+      resid_abs_ = numeric(length(", xvar, "))")
 
     # For data points lower than the full order
     for (i in seq_len(ar_order)) {
-      mm = paste0(mm, "\n      resid_[", i, "] = ",
+      mm = paste0(mm, "\n      resid_abs_[", i, "] = ",
                   paste0("ar", 0:(i-1), "_[", i, " - ", 0:(i-1), "] * resid_sigma_[", i, " - ", 0:(i-1), "]", collapse = " + "))
     }
 
-    # For full order
     mm = paste0(mm, "
-      for (i_ in ", ar_order + 1, ":length(", xvar, ")) {
-        if (all(is.na(", yvar, "))) {
+      for (i_ in ", ar_order + 1, ":length(", xvar, "))
+        resid_abs_[i_] = resid_sigma_[i_] + ", paste0("ar", seq_len(ar_order), "_[i_] * resid_abs_[i_ - ", seq_len(ar_order), "]", collapse = " + "), "
+      ")
 
-          resid_[i_] = resid_sigma_[i_]")
-    for (i in seq_len(ar_order)) {
-      mm = paste0(mm, " + ar", i, "_[i_] * resid_[i_ - ", i, "]")
+    # For given ydata:
+    mm = paste0(mm, "
+
+      resid_arma_ = resid_abs_ - resid_sigma_
+    } else {
+      # Got ydata.
+      mcp:::assert_numeric(", yvar, ")
+      resid_abs_ = ", yvar, " - y_
+      resid_arma_ = numeric(length(", xvar, "))
+      resid_arma_ = ", paste0("ar", seq_len(ar_order), "_ * dplyr::lag(resid_abs_, ", seq_len(ar_order), ")", collapse = " + "), "
+      resid_arma_[seq_len(", ar_order, ")] = 0  # replace NA
+      # resid_sigma_ = resid_abs_ - resid_arma_  # Outcommented because it's deterministic in this parameterization (always sums to the observed data exactly)
     }
-    mm = paste0(mm, "
-        } else {
-          resid_[i_] = ")
-    for (i in seq_len(ar_order)) {
-      mm = paste0(mm, " + ar", i, "_[i_] * resid_sigma_[i_ - ", i, "]")
-    }
 
-    mm = paste0(mm, "
-        }")
-
-    # Finish up
-    mm = paste0(mm, "\n
-      }")
+    y_ = y_ + resid_arma_
+    ")
   } else {
 
 
@@ -466,22 +509,22 @@ get_ar_code = function(ar_order, family, is_R, xvar, yvar = NA) {
     # For data points lower than the full order
     mm = paste0(mm, "
   # Apply autoregression to the residuals
-  resid_[1] = 0")
+  resid_arma_[1] = 0")
 
     # For data points lower than the full order
     if (ar_order >= 2) {
       for (i in 2:ar_order) {
         mm = paste0(mm, "
-  resid_[", i, "] = ", paste0("ar", 1:(i-1), "_[", i, " - ", 1:(i-1), "] * resid_sigma_[", i, " - ", 1:(i-1), "]", collapse = " +\n              "))
+  resid_arma_[", i, "] = ", paste0("ar", 1:(i-1), "_[", i, " - ", 1:(i-1), "] * resid_abs_[", i, " - ", 1:(i-1), "]", collapse = " +\n              "))
       }
     }
 
     # For full order
     mm = paste0(mm, "
   for (i_ in ", ar_order + 1, ":length(", xvar, ")) {
-    resid_[i_] = 0")
+    resid_arma_[i_] = 0")
     for (i in seq_len(ar_order)) {
-      mm = paste0(mm, " + \n      ar", i, "_[i_] * resid_sigma_[i_ - ", i, "]")
+      mm = paste0(mm, " + \n      ar", i, "_[i_] * resid_abs_[i_ - ", i, "]")
     }
 
     # Finish up
