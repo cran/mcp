@@ -52,7 +52,7 @@ the intervals can be deceiving Plot them using \code{plot_pars(fit)}.
 be acceptable if < 1.1. It is computed using \code{\link[coda]{gelman.diag}}.
 \item \code{n.eff} is the effective sample size computed using \code{\link[coda]{effectiveSize}}.
 Low effective sample sizes are also obvious as poor mixing in trace plots
-(see \code{plot_pars(fit)}). Read how to deal with such problems \href{https://lindeloev.github.io/mcp/articles/debug.html}{here}
+(see \code{plot_pars(fit)}). Read how to deal with such problems \href{https://lindeloev.github.io/mcp/articles/tips.html}{here}
 \item \code{ts_err} is the time-series error, taking autoregressive correlation
 into account. It is computed using \code{\link[coda]{spectrum0.ar}}.
 }
@@ -80,17 +80,17 @@ Summarise parameter estimates and model diagnostics.
 
 \examples{
 # Typical usage
-summary(ex_fit)
-summary(ex_fit, width = 0.8, digits = 4)  # Set HDI width
+summary(demo_fit)
+summary(demo_fit, width = 0.8, digits = 4)  # Set HDI width
 
 # Get the results as a data frame
-results = summary(ex_fit)
+results = summary(demo_fit)
 
 # Varying (random) effects
 # ranef(my_fit)
 
 # Summarise prior
-summary(ex_fit, prior = TRUE)
+summary(demo_fit, prior = TRUE)
 
 }
 \author{

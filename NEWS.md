@@ -1,3 +1,21 @@
+# mcp 0.3.1
+
+This is mostly a bug fix release.
+
+## New features:
+
+ * `ex = mcp_example("demo", with_fit = TRUE)` is the new interface that replaces the `ex_*` datasets in prior versions. This reduces clutter of the namespace/documentation and the size of the package. It also gives the user richer details on the simulation and analyses. For "demo", the `ex_demo` dataset is now `ex$data` and the `ex_fit` is `ex$fit`.
+
+ * Nicer printing of lists and texts all over. E.g., try `print(demo_fit$jags_code)` and `print(demo_fit$pars)`.
+
+
+## Bug fixes
+
+ * Support breaking changes in `tidybayes >= 3.0.0` and `dplyr >= 1.0.6`
+
+
+
+
 # mcp 0.3.0
 
 ## New features:

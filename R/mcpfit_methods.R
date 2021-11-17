@@ -76,6 +76,7 @@ get_summary = function(fit, width, varying = FALSE, prior = FALSE) {
   } else {
     samples = lapply(samples, function(x) x[, get_cols])
   }
+  class(samples) = "mcmc.list"  # Return to original class
 
   # Get parameter estimates
   estimates = samples %>%
@@ -187,7 +188,7 @@ get_summary = function(fit, width, varying = FALSE, prior = FALSE) {
 #'     be acceptable if < 1.1. It is computed using \code{\link[coda]{gelman.diag}}.
 #'   * `n.eff` is the effective sample size computed using \code{\link[coda]{effectiveSize}}.
 #'     Low effective sample sizes are also obvious as poor mixing in trace plots
-#'     (see `plot_pars(fit)`). Read how to deal with such problems [here](https://lindeloev.github.io/mcp/articles/debug.html)
+#'     (see `plot_pars(fit)`). Read how to deal with such problems [here](https://lindeloev.github.io/mcp/articles/tips.html)
 #'   * `ts_err` is the time-series error, taking autoregressive correlation
 #'     into account. It is computed using \code{\link[coda]{spectrum0.ar}}.
 #'
@@ -204,17 +205,17 @@ get_summary = function(fit, width, varying = FALSE, prior = FALSE) {
 #' @export
 #' @examples
 #' # Typical usage
-#' summary(ex_fit)
-#' summary(ex_fit, width = 0.8, digits = 4)  # Set HDI width
+#' summary(demo_fit)
+#' summary(demo_fit, width = 0.8, digits = 4)  # Set HDI width
 #'
 #' # Get the results as a data frame
-#' results = summary(ex_fit)
+#' results = summary(demo_fit)
 #'
 #' # Varying (random) effects
 #' # ranef(my_fit)
 #'
 #' # Summarise prior
-#' summary(ex_fit, prior = TRUE)
+#' summary(demo_fit, prior = TRUE)
 #'
 summary.mcpfit = function(object, width = 0.95, digits = 2, prior = FALSE, ...) {
   fit = object  # Standard name in mcp
@@ -222,6 +223,7 @@ summary.mcpfit = function(object, width = 0.95, digits = 2, prior = FALSE, ...) 
   assert_numeric(width, lower = 0, upper = 1)
   assert_integer(digits, lower = 0)
   assert_logical(prior)
+  assert_ellipsis(...)
 
   samples = mcmclist_samples(fit, prior = prior, error = FALSE)
 
@@ -257,6 +259,7 @@ summary.mcpfit = function(object, width = 0.95, digits = 2, prior = FALSE, ...) 
 #' @describeIn summary.mcpfit Get population-level ("fixed") effects of an \code{\link{mcpfit}} object.
 #' @export
 fixef = function(object, width = 0.95, prior = FALSE, ...) {
+  assert_ellipsis(...)
   get_summary(object, width, varying = FALSE, prior = prior)
 }
 
@@ -265,6 +268,7 @@ fixef = function(object, width = 0.95, prior = FALSE, ...) {
 #' @describeIn summary.mcpfit Get varying ("random") effects of an \code{\link{mcpfit}} object.
 #' @export
 ranef = function(object, width = 0.95, prior = FALSE, ...) {
+  assert_ellipsis(...)
   get_summary(object, width, varying = TRUE, prior = prior)
 }
 
@@ -275,18 +279,6 @@ ranef = function(object, width = 0.95, prior = FALSE, ...) {
 #' @export
 print.mcpfit = function(x, ...) {
   summary(x, ...)
-}
-
-#' Print mcpprior
-#'
-#' The mcpprior is just a list, but it can be displayed in a more condensed
-#' way using cbind.
-#' @aliases print.mcpprior
-#' @inheritParams print.mcpfit
-print.mcpprior = function(x, ...) {
-  to_print = cbind(x)
-  colnames(to_print) = "prior"
-  print(to_print)
 }
 
 
@@ -404,17 +396,17 @@ unpack_varying = function(fit, pars = NULL, cols = NULL) {
 #' @inheritParams mcmclist_samples
 #' @inheritParams pp_eval
 #' @param population
-#'   * \strong{TRUE:} All population effects. Same as `fit$pars$population`.
-#'   * \strong{FALSE:} No population effects. Same as `c()`.
-#'   * \strong{Character vector:} Only include specified population parameters - see `fit$pars$population`.
-#' @param varying
-#'   * \strong{TRUE:} All varying effects (`fit$pars$varying`).
-#'   * \strong{FALSE:} No varying efects (`c()`).
-#'   * \strong{Character vector:} Only include specified varying parameters - see `fit$pars$varying`.
+#'   * `TRUE` All population effects. Same as `fit$pars$population`.
+#'   * `FALSE` No population effects. Same as `c()`.
+#'   * Character vector: Only include specified population parameters - see `fit$pars$population`.
+#' @param varying One of:
+#'   * `TRUE` All varying effects (`fit$pars$varying`).
+#'   * `FALSE` No varying efects (`c()`).
+#'   * Character vector: Only include specified varying parameters - see `fit$pars$varying`.
 #' @param absolute
-#'   * \strong{TRUE:} Returns the absolute location of all varying change points.
-#'   * \strong{FALSE:} Just returns the varying effects.
-#'   * \strong{Character vector:} Only do absolute transform for these varying parameters - see `fit$pars$varying`.
+#'   * `TRUE` Returns the absolute location of all varying change points.
+#'   * `FALSE` Just returns the varying effects.
+#'   * Character vector: Only do absolute transform for these varying parameters - see `fit$pars$varying`.
 #'
 #'   OBS: This currently only applies to varying change points. It is not implemented for `rel()` regressors yet.
 #' @return `tibble` of posterior draws in `tidybayes` format.
@@ -482,7 +474,7 @@ tidy_samples = function(
 
   # Build code for tidybayes::spread_draws() and execute it
   all_terms = unique(c(pars_population, terms_varying, absolute_cps))
-  code = paste0("tidybayes::spread_draws(samples, ", paste0(all_terms, collapse = ", "), ", n = nsamples)")
+  code = paste0("tidybayes::spread_draws(samples, ", paste0(all_terms, collapse = ", "), ", ndraws = nsamples)")
   samples = eval(parse(text = code))
 
   # Make varying columns factor if they are factors in fit$data
@@ -529,13 +521,13 @@ tidy_samples = function(
 #' @param which_y What to plot on the y-axis. One of
 #'
 #'   * `"ct"`: The central tendency which is often the mean after applying the
-#'     link function (default).
+#'     link function.
 #'   * `"sigma"`: The variance
 #'   * `"ar1"`, `"ar2"`, etc. depending on which order of the autoregressive
 #'     effects you want to plot.
 #' @param arma Whether to include autoregressive effects.
-#'   * `TRUE:` Compute autoregressive residuals. Requires the response variable in `newdata`.
-#'   * `FALSE:` Disregard the autoregressive effects. For `family = gaussian()`, `predict()` just use `sigma` for residuals.
+#'   * `TRUE` Compute autoregressive residuals. Requires the response variable in `newdata`.
+#'   * `FALSE` Disregard the autoregressive effects. For `family = gaussian()`, `predict()` just use `sigma` for residuals.
 #' @param nsamples Integer or `NULL`. Number of samples to return/summarise.
 #'   If there are varying effects, this is the number of samples from each varying group.
 #'   `NULL` means "all". Ignored if both are `FALSE`. More samples trade speed for accuracy.
@@ -544,7 +536,7 @@ tidy_samples = function(
 #' @param scale One of
 #'   * "response": return on the observed scale, i.e., after applying the inverse link function.
 #'   * "linear": return on the parameter scale (where the linear trends are modelled).
-#' @param ... Currently unused
+#' @param ... Currently ignored.
 #' @return
 #'   * If `summary = TRUE`: A `tibble` with the posterior mean for each row in `newdata`,
 #'     If `newdata` is `NULL`, the data in `fit$data` is used.
@@ -582,8 +574,7 @@ pp_eval = function(
   arma = TRUE,
   nsamples = NULL,
   samples_format = "tidy",
-  scale = 'response',
-  ...
+  scale = 'response'
 ) {
   # Recodings
   fit = object
@@ -727,12 +718,12 @@ pp_eval = function(
 #' @author Jonas Kristoffer Lindeløv \email{jonas@@lindeloev.dk}
 #' @export
 #' @examples
-#' predict(ex_fit)  # Evaluate at each ex_fit$data
+#' predict(demo_fit)  # Evaluate at each demo_fit$data
 #' \donttest{
-#' predict(ex_fit, probs = c(0.1, 0.5, 0.9))  # With median and 80% credible interval.
-#' predict(ex_fit, summary = FALSE)  # Samples instead of summary.
+#' predict(demo_fit, probs = c(0.1, 0.5, 0.9))  # With median and 80% credible interval.
+#' predict(demo_fit, summary = FALSE)  # Samples instead of summary.
 #' predict(
-#'   ex_fit,
+#'   demo_fit,
 #'   newdata = data.frame(time = c(-5, 20, 300)),  # Evaluate
 #'   probs = c(0.025, 0.5, 0.975)
 #' )
@@ -752,6 +743,7 @@ predict.mcpfit = function(
   samples_format = "tidy",
   ...
 ) {
+  assert_ellipsis(...)
   pp_eval(
     object,
     newdata = newdata,
@@ -780,10 +772,10 @@ predict.mcpfit = function(
 #' @export
 #' @examples
 #' \donttest{
-#' fitted(ex_fit)
-#' fitted(ex_fit, probs = c(0.1, 0.5, 0.9))  # With median and 80% credible interval.
-#' fitted(ex_fit, summary = FALSE)  # Samples instead of summary.
-#' fitted(ex_fit,
+#' fitted(demo_fit)
+#' fitted(demo_fit, probs = c(0.1, 0.5, 0.9))  # With median and 80% credible interval.
+#' fitted(demo_fit, summary = FALSE)  # Samples instead of summary.
+#' fitted(demo_fit,
 #'        newdata = data.frame(time = c(-5, 20, 300)),  # New data
 #'        probs = c(0.025, 0.5, 0.975))
 #'}
@@ -803,6 +795,7 @@ fitted.mcpfit = function(
   scale = "response",
   ...
 ) {
+  assert_ellipsis(...)
   pp_eval(
     object,
     newdata = newdata,
@@ -836,9 +829,9 @@ fitted.mcpfit = function(
 #' @export
 #' @examples
 #' \donttest{
-#' residuals(ex_fit)
-#' residuals(ex_fit, probs = c(0.1, 0.5, 0.9))  # With median and 80% credible interval.
-#' residuals(ex_fit, summary = FALSE)  # Samples instead of summary.
+#' residuals(demo_fit)
+#' residuals(demo_fit, probs = c(0.1, 0.5, 0.9))  # With median and 80% credible interval.
+#' residuals(demo_fit, summary = FALSE)  # Samples instead of summary.
 #'}
 #'
 residuals.mcpfit = function(
@@ -852,6 +845,7 @@ residuals.mcpfit = function(
   nsamples = NULL,
   ...
 ) {
+  assert_ellipsis(...)
   pp_eval(
     object,
     newdata = newdata,
