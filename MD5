@@ -1,6 +1,6 @@
-383a0236762667ec65ecdcb0cf08e085 *DESCRIPTION
+470c8dca33584ef1ffbd03809847346d *DESCRIPTION
 b85da3c5863222983154770f832977c3 *NAMESPACE
-6998e1a893f9888b44d1d31858b44ce1 *NEWS.md
+34392954abcdf15d93023353ec0fe22c *NEWS.md
 584f3ab139c13ecdfa66221a2e5dc750 *R/comparison.R
 70de211b70f33d0b9ef93fa2196bd986 *R/data.R
 07de571cf8492b1d75a4ddd8b929a3b8 *R/families.R
@@ -48,7 +48,7 @@ f5e8e8de8ac012a52d6af914608591df *man/get_summary.Rd
 aec4221c394984334806fc0ace35ee00 *man/ilogit.Rd
 92d4e65def86cb87981ae962f988c75b *man/is.mcpfit.Rd
 eca91d54aebad8ecabb99f026181ca67 *man/logit.Rd
-6c48ed8e1bb45aaf3f4f4fb782c1df5e *man/mcmclist_samples.Rd
+51d4dbec7f00fbacf754e2d0556c8784 *man/mcmclist_samples.Rd
 2896ac730842a76b7e3f9f3c885a5132 *man/mcp-package.Rd
 79db0b71d4240ef0943c5415582774da *man/mcp.Rd
 28e088f07a5e27b2f487fe323d86421b *man/mcp_example.Rd
@@ -87,7 +87,7 @@ ed32743202105f694db9deb64c5f4e90 *man/with_loo.Rd
 5774ecab12a4cb73333077f586deab4c *tests/testthat.R
 165828a92c1fae3b1275701a431e1e1f *tests/testthat/helper-fits.R
 a2a91ac2f6a8452bd922c10ec1d88b63 *tests/testthat/helper-runs-data.R
-2ff5fa80a1b4339d73cf70452b56baf2 *tests/testthat/helper-runs.R
+ecec2ba3b2733ebb3c50d11b545a4acb *tests/testthat/helper-runs.R
 bee0d6ef4d4ac04bf0fbca909fd806e1 *tests/testthat/test-fits-arma.R
 d68a205e76217cdf5a3b426133940e54 *tests/testthat/test-fits-gauss.R
 d3c5a1c38409c00b644f36fa0bfed9b1 *tests/testthat/test-fits-sigma.R
